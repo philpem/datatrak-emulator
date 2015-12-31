@@ -61,7 +61,8 @@ uint32_t m68k_read_memory_32(uint32_t address)/*{{{*/
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_LENGTH))) {
 		return DWORD_READ(ram, address - RAM_BASE);
 	} else {
-		// FIXME log access to unimplemented peripheral
+		// log unhandled access
+		fprintf(stderr, "RD32 from UNHANDLED 0x%08x ignored, pc=%08X\n", address, m68k_get_reg(NULL, M68K_REG_PC));
 		return 0xFFFFFFFF;
 	}
 }
@@ -74,7 +75,8 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_LENGTH))) {
 		return WORD_READ(ram, address - RAM_BASE);
 	} else {
-		// FIXME log access to unimplemented peripheral
+		// log unhandled access
+		fprintf(stderr, "RD16 from UNHANDLED 0x%08x ignored, pc=%08X\n", address, m68k_get_reg(NULL, M68K_REG_PC));
 		return 0xFFFF;
 	}
 }
@@ -87,8 +89,9 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_LENGTH))) {
 		return WORD_READ(ram, address - RAM_BASE);
 	} else {
-		// FIXME log access to unimplemented peripheral
-		return 0xFFFF;
+		// log unhandled access
+		fprintf(stderr, "RD-8 from UNHANDLED 0x%08x ignored, pc=%08X\n", address, m68k_get_reg(NULL, M68K_REG_PC));
+		return 0xFF;
 	}
 }
 /*}}}*/
@@ -97,12 +100,13 @@ void m68k_write_memory_32(uint32_t address, uint32_t value)/*{{{*/
 {
 	if (address < ROM_LENGTH) {
 		// WRITE TO ROM
-		fprintf(stderr, "WR32 to ROM 0x%08x => 0x%08X ignored\n", address, value);
+		fprintf(stderr, "WR32 to ROM 0x%08x => 0x%08X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PC));
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_LENGTH))) {
 		// write to RAM
 		DWORD_WRITE(ram, address - RAM_BASE, value);
 	} else {
-		// FIXME log
+		// log unhandled access
+		fprintf(stderr, "WR32 to UNHANDLED 0x%08x => 0x%08X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PC));
 	}
 }
 /*}}}*/
@@ -111,12 +115,13 @@ void m68k_write_memory_16(uint32_t address, uint32_t value)/*{{{*/
 {
 	if (address < ROM_LENGTH) {
 		// WRITE TO ROM
-		fprintf(stderr, "WR16 to ROM 0x%08x => 0x%04X ignored\n", address, value);
+		fprintf(stderr, "WR16 to ROM 0x%08x => 0x%04X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PC));
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_LENGTH))) {
 		// write to RAM
 		WORD_WRITE(ram, address - RAM_BASE, value);
 	} else {
-		// FIXME log
+		// log unhandled access
+		fprintf(stderr, "WR16 to UNHANDLED 0x%08x => 0x%04X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PC));
 	}
 }
 /*}}}*/
@@ -125,12 +130,13 @@ void m68k_write_memory_8(uint32_t address, uint32_t value)/*{{{*/
 {
 	if (address < ROM_LENGTH) {
 		// WRITE TO ROM
-		fprintf(stderr, "WR-8 to ROM 0x%08x => 0x%02X ignored\n", address, value);
+		fprintf(stderr, "WR-8 to ROM 0x%08x => 0x%02X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PC));
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_LENGTH))) {
 		// write to RAM
 		ram[address - RAM_BASE] = value;
 	} else {
-		// FIXME log
+		// log unhandled access
+		fprintf(stderr, "WR-8 to UNHANDLED 0x%08x => 0x%02X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PC));
 	}
 }
 /*}}}*/
@@ -204,9 +210,24 @@ int main(int argc, char **argv)
 		free(evenbuf);
 	}
 
-	// Blank RAM (or fill it with crap?) who cares?
-
 	// Boot the 68000
+	//
+#define SYSTEM_CLOCK 20e6 /*Hz*/
+#define TIMESLOT_FREQUENCY 1 /*Hz*/
+
+	m68k_set_cpu_type(M68K_CPU_TYPE_68000);
+	m68k_pulse_reset();
+
+	uint32_t clock_cycles = 0;
+
+	for (;;) {
+		uint32_t tmp = m68k_execute(SYSTEM_CLOCK/TIMESLOT_FREQUENCY);
+		clock_cycles += tmp;
+
+		// TODO: Delay 1/TIMESLOT_FREQUENCY to make this run at real time
+		//
+		return 0;
+	}
 
 	return 0;
 }
