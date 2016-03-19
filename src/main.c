@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <ctype.h>
 #include <malloc.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -148,7 +149,8 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 		ram[(address - RAM_BASE) & (RAM_LENGTH - 1)] = value;
 	} else {
 		// log unhandled access
-		fprintf(stderr, "WR-8 to UNHANDLED 0x%08x => 0x%02X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PC));
+		fprintf(stderr, "WR-8 to UNHANDLED 0x%08x => 0x%02X '%c' ignored, pc=%08X\n",
+				address, value, isprint(value) ? value : '.', m68k_get_reg(NULL, M68K_REG_PC));
 	}
 }
 /*}}}*/
