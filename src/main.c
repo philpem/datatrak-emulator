@@ -86,6 +86,35 @@ const char *GetDevFromAddr(const uint32_t address)
 	return "?";
 }
 
+static const char *GetUartRegFromAddr(const uint32_t addr, const bool reading)
+{
+	const char *RA[16][2] = {
+		{ "MR1A/MR2A",	"MR1A/MR2A"	},
+		{ "SRA",		"CSRA"		},
+		{ "BRG Test",	"CRA"		},
+		{ "RHRA",		"THRA"		},
+		{ "IPCR",		"ACR"		},
+		{ "ISR",		"IMR"		},
+		{ "CTU",		"CRUR"		},
+		{ "CTL",		"CTLR"		},
+
+		{ "MR1B/MR2B",	"MR1B/MR2B"	},
+		{ "SRB",		"CSRB"		},
+		{ "1x/16x Test","CRB"		},
+		{ "RHRB",		"THRB"		},
+		{ "IVR",		"IVR"		},
+		{ "IP0-6",		"OPCR"		},
+		{ "START COUNTER", "SET OUT BITS" },
+		{ "STOP  COUNTER", "RESET OUT BITS" }
+	};
+
+	if (reading) {
+		return RA[(addr >> 1) & 0x0F][0];
+	} else {
+		return RA[(addr >> 1) & 0x0F][1];
+	}
+}
+
 
 // Disassembler: can only access ROM and RAM
 uint32_t m68k_read_disassembler_32(uint32_t address)/*{{{*/
@@ -119,6 +148,11 @@ uint32_t m68k_read_memory_32(uint32_t address)/*{{{*/
 		return DWORD_READ(rom, address);
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_WINDOW))) {
 		return DWORD_READ(ram, (address - RAM_BASE) & (RAM_LENGTH - 1));
+	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
+		fprintf(stderr, "RD32 %s <%s> 0x%08x ignored, pc=%08X\n",
+				GetDevFromAddr(address), GetUartRegFromAddr(address, true),
+				address, m68k_get_reg(NULL, M68K_REG_PPC));
+		return UNIMPLEMENTED_VALUE;
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
@@ -138,6 +172,11 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 	} else if ((address == 0x240200) || (address == 0x240201)) {
 		// phase register
 		return 0;		// FIXME PHASE REGISTER
+	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
+		fprintf(stderr, "RD16 %s <%s> 0x%08x ignored, pc=%08X\n",
+				GetDevFromAddr(address), GetUartRegFromAddr(address, true),
+				address, m68k_get_reg(NULL, M68K_REG_PPC));
+		return UNIMPLEMENTED_VALUE & 0xFFFF;
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
@@ -157,6 +196,11 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 	} else if ((address == 0x240200) || (address == 0x240201)) {
 		// phase register
 		return 0xff;		// FIXME PHASE REGISTER
+	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
+		fprintf(stderr, "RD-8 %s <%s> 0x%08x ignored, pc=%08X\n",
+				GetDevFromAddr(address), GetUartRegFromAddr(address, true),
+				address, m68k_get_reg(NULL, M68K_REG_PPC));
+		return UNIMPLEMENTED_VALUE & 0xFF;
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
@@ -177,6 +221,10 @@ void m68k_write_memory_32(unsigned int address, unsigned int value)/*{{{*/
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_WINDOW))) {
 		// write to RAM
 		DWORD_WRITE(ram, (address - RAM_BASE) & (RAM_LENGTH - 1), value);
+	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
+		fprintf(stderr, "WR32 %s <%s> 0x%08x ignored, pc=%08X\n",
+				GetDevFromAddr(address), GetUartRegFromAddr(address, false),
+				address, m68k_get_reg(NULL, M68K_REG_PPC));
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
@@ -198,6 +246,10 @@ void m68k_write_memory_16(unsigned int address, unsigned int value)/*{{{*/
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_WINDOW))) {
 		// write to RAM
 		WORD_WRITE(ram, (address - RAM_BASE) & (RAM_LENGTH - 1), value);
+	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
+		fprintf(stderr, "WR16 %s <%s> 0x%08x ignored, pc=%08X\n",
+				GetDevFromAddr(address), GetUartRegFromAddr(address, false),
+				address, m68k_get_reg(NULL, M68K_REG_PPC));
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
@@ -223,10 +275,9 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 		// UART -- SCC68692
 //		printf("UART Write reg %d: 0x%08X\n", (address / 2) & 0x0F, value);
 //		printf("%c", (char)value);
-		uint8_t reg = (address / 2) & 0x0F;
-		if (reg == 0x0C) { printf("UART IVR -> 0x%02X, pc=%08X\n", value, m68k_get_reg(NULL, M68K_REG_PPC)); }
-		if (reg == 0x03) { printf("%c", value); }
-		if (reg == 0x0B) { printf("UART THRB -> %c\n", value); }
+		fprintf(stderr, "WR32 %s <%s> 0x%08x ignored, pc=%08X\n",
+				GetDevFromAddr(address), GetUartRegFromAddr(address, false),
+				address, m68k_get_reg(NULL, M68K_REG_PPC));
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
