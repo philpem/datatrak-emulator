@@ -35,11 +35,56 @@ uint8_t ram[RAM_LENGTH];
 
 
 // Value to return if the CPU reads from unimplemented memory
-#define UNIMPLEMENTED_VALUE (0xFFFFFFFF)
-//#define UNIMPLEMENTED_VALUE (0)
+#ifdef UNIMPL_READS_AS_FF
+#  define UNIMPLEMENTED_VALUE (0xFFFFFFFF)
+#else
+#  define UNIMPLEMENTED_VALUE (0)
+#endif
 
 
 #define LOG_UNHANDLED
+
+
+const char *GetDevFromAddr(const uint32_t address)
+{
+	if ((address >= 0x240000) && (address <= 0x24FFFF)) {
+		switch (address & 0xFFFF00) {
+			case 0x240000:
+				return "ADC";
+				break;
+
+			case 0x240100:
+				return "UNK 24:01";		// read 240101 from pc=0001FC90
+				break;
+
+			case 0x240200:
+				return "RF Phase";
+				break;
+
+			case 0x240300:
+				return "UART";
+				break;
+
+			case 0x240500:
+				return "UNK 24:05";
+				break;
+
+			case 0x240700:
+				return "UNK 24:07";
+				break;
+
+			case 0x240800:
+				return "UNK 24:08";		// write 240801 from pc=0001FC22, pc=0001FC2C, pc=0001FCB6, pc=0001FC44, pc=0001FC52, pc=0001FC6C
+				break;
+
+			default:
+				return "UNK 24:??";
+				break;
+		}
+	}
+
+	return "?";
+}
 
 
 // Disassembler: can only access ROM and RAM
@@ -77,7 +122,7 @@ uint32_t m68k_read_memory_32(uint32_t address)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "RD32 from UNHANDLED 0x%08x ignored, pc=%08X\n", address, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "RD32 UNHANDLED [%-9s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 		return UNIMPLEMENTED_VALUE;
 	}
@@ -96,7 +141,7 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "RD16 from UNHANDLED 0x%08x ignored, pc=%08X\n", address, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "RD16 UNHANDLED [%-9s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 		return UNIMPLEMENTED_VALUE & 0xFFFF;
 	}
@@ -115,7 +160,7 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "RD-8 from UNHANDLED 0x%08x ignored, pc=%08X\n", address, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "RD-8 UNHANDLED [%-9s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 		return UNIMPLEMENTED_VALUE & 0xFF;
 	}
@@ -135,7 +180,7 @@ void m68k_write_memory_32(unsigned int address, unsigned int value)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "WR32 to UNHANDLED 0x%08x => 0x%08X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "WR32 UNHANDLED [%-9s] 0x%08x => 0x%08X ignored, pc=%08X\n", GetDevFromAddr(address), address, value, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 	}
 }
@@ -156,7 +201,7 @@ void m68k_write_memory_16(unsigned int address, unsigned int value)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "WR16 to UNHANDLED 0x%08x => 0x%04X ignored, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "WR16 UNHANDLED [%-9s] 0x%08x => 0x%04X ignored, pc=%08X\n", GetDevFromAddr(address), address, value, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 	}
 }
@@ -180,13 +225,14 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 //		printf("%c", (char)value);
 		uint8_t reg = (address / 2) & 0x0F;
 		if (reg == 0x0C) { printf("UART IVR -> 0x%02X, pc=%08X\n", value, m68k_get_reg(NULL, M68K_REG_PPC)); }
-//		if (reg == 0x03) { printf("%c", value); }
+		if (reg == 0x03) { printf("%c", value); }
 		if (reg == 0x0B) { printf("UART THRB -> %c\n", value); }
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "WR-8 to UNHANDLED 0x%08x => 0x%02X '%c' ignored, pc=%08X\n",
-				address, value, isprint(value) ? value : '.', m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "WR-8 UNHANDLED [%-9s] 0x%08x => 0x%02X '%c' ignored, pc=%08X\n",
+				GetDevFromAddr(address), address, value,
+				isprint(value) ? value : '.', m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 	}
 }
@@ -210,7 +256,7 @@ int m68k_irq_callback(int int_level)
 	if (InterruptFlags.uart)
 	{
 		InterruptFlags.uart = 0;
-		intr_num = 0x00;
+		intr_num = 0x40;
 	}
 
 	m68k_set_irq(0);
