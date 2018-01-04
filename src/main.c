@@ -323,11 +323,16 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 		case 3:		// Transmit holding register A
 			printf("UARTA --> %c  [%02x]\n", value, value);
-			if (send(Uart.SocketA, &value, 1, 0) != 1) {
-				die("Mismatch in number of sent bytes (UARTA)");
+			if (Uart.SocketA > 0) {
+				if (send(Uart.SocketA, &value, 1, 0) != 1) {
+					die("Mismatch in number of sent bytes (UARTA)");
+				}
 			}
 
-			// If ISR  TODO
+			// If IMR transmit interrupt is enabled, pend a TX IRQ
+			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10)) {
+				InterruptFlags.uart = true;
+			}
 
 			break;
 
@@ -344,6 +349,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			if (Uart.IMR & 0x02) fprintf(stderr, "RxRdy/FFullA ");
 			if (Uart.IMR & 0x01) fprintf(stderr, "TxRdyA ");
 			fprintf(stderr, "\n");
+
+			// If TX interrupt is enabled, pend one (transmit buffer clear)
+			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10)) {
+				InterruptFlags.uart = true;
+			}
 			break;
 
 
@@ -406,8 +416,10 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 		case 11:	// Transmit holding register B
 			printf("UARTB --> %c  [%02x]\n", value, value);
-			if (send(Uart.SocketB, &value, 1, 0) != 1) {
-				die("Mismatch in number of sent bytes (UARTB)");
+			if (Uart.SocketB > 0) {
+				if (send(Uart.SocketB, &value, 1, 0) != 1) {
+					die("Mismatch in number of sent bytes (UARTB)");
+				}
 			}
 			break;
 
@@ -444,6 +456,9 @@ uint8_t UartRegRead(uint32_t address)
 		case 1:		// Status Register A
 		case 9:		// Status Register B
 			return 0xC0;		// TxRDY on, TxEMT on
+
+		case 5:		// Interrupt status register
+			return 0x11;	// Channel A TXRDY, Channel B TXRDY
 
 		default:
 			return UNIMPLEMENTED_VALUE & 0xFF;
@@ -744,11 +759,10 @@ int main(int argc, char **argv)
 			n++;
 		}
 
-		/*
+		InterruptFlags.phase_tick = false;		// FIXME DEBUG - phase tick causes crash on boot
 		if (InterruptFlags.uart || InterruptFlags.phase_tick) {
 			m68k_set_irq(7);
 		}
-		*/
 
 		// TODO: Delay 1/TIMESLOT_FREQUENCY to make this run at real time
 		//
@@ -763,4 +777,14 @@ int main(int argc, char **argv)
 
 /***
  * Code gets stuck at pc=23E2 if UART status register returns zero
+ *
+ * also weirdly if m68k_set_irq(7) is called, we get a spurious IRQ error. herpaderp.
+ *
+ * TODO's for the UART - when irq mask (IMR) gets TxRdy bit set, make sure to pend an IRQ indicating TX is ready.
+ *   uart driver should "pretend" data is sent instantly, UART is always ready
+ *   need to use select() to figure out if data is available in the socket before sending RX interrupts though
+ *
+ * uart terminal cmds:
+ *   stty -icanon && ncat -k -l 8888
+ *   stty -icanon && ncat -k -l 8889
  */
