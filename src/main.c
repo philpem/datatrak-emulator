@@ -69,7 +69,7 @@ const char *GetDevFromAddr(const uint32_t address)
 				break;
 
 			case 0x240100:
-				return "UNK 24:01";		// read 240101 from pc=0001FC90
+				return "EEPROM RDIO";		// read 240101 from pc=0001FC90
 				break;
 
 			case 0x240200:
@@ -85,11 +85,11 @@ const char *GetDevFromAddr(const uint32_t address)
 				break;
 
 			case 0x240700:
-				return "UNK 24:07";		// write 240701
+				return "ADCON CHSEL";		// write 240701
 				break;
 
 			case 0x240800:
-				return "UNK 24:08";		// write 240801 from pc=0001FC22, pc=0001FC2C, pc=0001FCB6, pc=0001FC44, pc=0001FC52, pc=0001FC6C
+				return "EEPROM WRIO";		// write 240801 from pc=0001FC22, pc=0001FC2C, pc=0001FCB6, pc=0001FC44, pc=0001FC52, pc=0001FC6C
 				break;
 
 			default:
@@ -448,21 +448,27 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 uint8_t UartRegRead(uint32_t address)
 {
-	fprintf(stderr, "RD-8 %s <%s> 0x%08x ignored, pc=%08X\n",
-			GetDevFromAddr(address), GetUartRegFromAddr(address, true),
-			address, m68k_get_reg(NULL, M68K_REG_PPC));
+	uint8_t val;
 
 	switch ((address >> 1) & 0x0F) {
 		case 1:		// Status Register A
 		case 9:		// Status Register B
-			return 0x0C;		// TxRDY on, TxEMT on, RxRDY off
+			val = 0x0C;		// TxRDY on, TxEMT on, RxRDY off
+			break;
 
 		case 5:		// Interrupt status register
-			return 0x11;	// Channel A TXRDY, Channel B TXRDY
+			val = 0x11;	// Channel A TXRDY, Channel B TXRDY
+			break;
 
 		default:
-			return UNIMPLEMENTED_VALUE & 0xFF;
+			val = UNIMPLEMENTED_VALUE & 0xFF;
+			break;
 	}
+
+	fprintf(stderr, "RD-8 %s <%s> 0x%08x => 0x%02x, pc=%08X\n",
+			GetDevFromAddr(address), GetUartRegFromAddr(address, true),
+			address, val, m68k_get_reg(NULL, M68K_REG_PPC));
+	return val;
 }
 
 
@@ -523,7 +529,7 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 		// phase register
 		return 0xff;		// FIXME PHASE REGISTER
 	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
-		fprintf(stderr, "RD16 %s <%s> 0x%08x ignored, pc=%08X\n",
+		fprintf(stderr, "RD16 %s <%s> 0x%08x UNIMPLEMENTED_RWSIZE, pc=%08X\n",
 				GetDevFromAddr(address), GetUartRegFromAddr(address, true),
 				address, m68k_get_reg(NULL, M68K_REG_PPC));
 		return UNIMPLEMENTED_VALUE & 0xFFFF;
