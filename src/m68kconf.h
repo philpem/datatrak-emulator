@@ -64,11 +64,11 @@
 /* ======================================================================== */
 
 /* Turn ON if you want to use the following M68K variants */
-#define M68K_EMULATE_010            OPT_ON
-#define M68K_EMULATE_EC020          OPT_ON
-#define M68K_EMULATE_020            OPT_ON
-#define M68K_EMULATE_030            OPT_ON
-#define M68K_EMULATE_040            OPT_ON
+#define M68K_EMULATE_010            OPT_OFF
+#define M68K_EMULATE_EC020          OPT_OFF
+#define M68K_EMULATE_020            OPT_OFF
+#define M68K_EMULATE_030            OPT_OFF
+#define M68K_EMULATE_040            OPT_OFF
 
 
 /* If ON, the CPU will call m68k_read_immediate_xx() for immediate addressing
@@ -89,7 +89,7 @@
  * If off, all interrupts will be autovectored and all interrupt requests will
  * auto-clear when the interrupt is serviced.
  */
-#define M68K_EMULATE_INT_ACK        OPT_OFF
+#define M68K_EMULATE_INT_ACK        OPT_ON
 #define M68K_INT_ACK_CALLBACK(A)    your_int_ack_handler_function(A)
 
 
@@ -186,7 +186,7 @@
 
 /* Emulate PMMU : if you enable this, there will be a test to see if the current chip has some enabled pmmu added to every memory access,
  * so enable this only if it's useful */
-#define M68K_EMULATE_PMMU   OPT_ON
+#define M68K_EMULATE_PMMU   OPT_OFF
 
 /* ----------------------------- COMPATIBILITY ---------------------------- */
 
