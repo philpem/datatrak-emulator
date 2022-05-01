@@ -13,7 +13,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-#include "musashi/m68k.h"
+#include "m68k.h"
 
 #include "wordops.h"
 
@@ -739,6 +739,7 @@ int main(int argc, char **argv)
 #define INTERRUPT_RATE 1000 /* Hz */
 #define CLOCKS_PER_INTERRUPT  (SYSTEM_CLOCK / INTERRUPT_RATE)
 
+	m68k_init();
 	m68k_set_cpu_type(M68K_CPU_TYPE_68000);
 	m68k_set_int_ack_callback(&m68k_irq_callback);
 	m68k_pulse_reset();

@@ -127,7 +127,7 @@ VER_MINOR	= 0
 VER_EXTRA	?= 
 
 # build platform: win32, linux, osx
-PLATFORM	?=	$(shell ./idplatform.sh)
+PLATFORM	?=	linux
 # build type: release or debug
 BUILD_TYPE	?=	debug
 
@@ -136,7 +136,7 @@ TARGET		=	emutrak
 
 # source files that produce object files
 SRC			=	main.c
-SRC			+=	musashi/m68kcpu.c musashi/m68kdasm.c musashi/m68kops.c musashi/m68kopac.c musashi/m68kopdm.c musashi/m68kopnz.c
+SRC			+=	m68kcpu.c m68kdasm.c m68kops.c softfloat/softfloat.c
 
 # source type - either "c" or "cpp" (C or C++)
 SRC_TYPE	=	c
@@ -159,7 +159,7 @@ LIBPATH		=
 INCPATH		=
 
 # Garbage files which should be deleted on a 'make clean' or 'make tidy'
-GARBAGE		=	obj/musashi/m68kmake obj/musashi/m68kmake.exe obj/musashi/m68kmake.o
+GARBAGE		=	obj/m68kmake obj/m68kmake.exe obj/m68kmake.o
 
 # extra dependencies - files that we don't necessarily know how to build, but
 # that are required for building the application; e.g. object files or
@@ -224,8 +224,6 @@ endif
 ####
 # Version info generation
 ####
-# get the current build number
-VER_BUILDNUM	= $(shell cat .buildnum 2>/dev/null||echo 0)
 
 #### --- begin Subversion revision grabber ---
 # there are two ways to get the SVN revision - use svnversion, or use svn info
@@ -263,7 +261,7 @@ endif
 #### --- end version grabbers ---
 
 # start creating the revision string
-VER_FULLSTR		= $(VER_MAJOR).$(VER_MINOR).$(VER_BUILDNUM)$(VER_EXTRA)
+VER_FULLSTR		= $(VER_MAJOR).$(VER_MINOR)$(VER_EXTRA)
 
 # if this is a VCS release, include the SVN revision in the version string
 # also create a revision string that is either "svn:12345", "hg:12345" or
@@ -355,14 +353,9 @@ endif
 ####
 .PHONY:	default all update-revision versionheader clean-versioninfo init cleandep clean tidy
 
-all:	update-revision
+all:
 	@$(MAKE) versionheader
 	$(MAKE) $(TARGET)
-
-# increment the current build number
-NEWBUILD=$(shell expr $(VER_BUILDNUM) + 1)
-update-revision:
-	@echo $(NEWBUILD) > .buildnum
 
 versionheader:
 	@sed -e 's/@@datetime@@/$(shell LC_ALL=C date +"%a %d-%b-%Y %T %Z")/g'		\
@@ -374,7 +367,6 @@ versionheader:
 		 -e 's/@@majorver@@/$(VER_MAJOR)/g'					\
 		 -e 's/@@minorver@@/$(VER_MINOR)/g'					\
 		 -e 's/@@extraver@@/$(subst \",,$(VER_EXTRA))/g'	\
-		 -e 's/@@buildnum@@/$(VER_BUILDNUM)/g'				\
 		 -e 's/@@buildtype@@/$(BUILD_TYPE)/g'				\
 		 -e 's/@@vcs@@/$(VER_VCS)/g'						\
 		 -e 's/@@vcsrev@@/$(VER_VCSREV)/g'					\
@@ -383,19 +375,11 @@ versionheader:
 		 -e 's#@@cflags@@#$(CFLAGS)#g'						\
 		 < src/version.h.in > src/version.h
 
-# version.h creation stuff based on code from the Xen makefile
-clean-versioninfo:
-	@if [ ! -r src/version.h -o -O src/version.h ]; then \
-		rm -f src/version.h; \
-	fi
-	@echo 0 > .buildnum
-
 # initialise the build system for a new project
 init:
 	@mkdir -p src dep obj
 	@echo "This file is a directory-keeper. Do not delete it." > dep/.keepme
 	@echo "This file is a directory-keeper. Do not delete it." > obj/.keepme
-	@echo 0 > .buildnum
 	@echo 'syntax: glob' > .hgignore
 	@echo 'obj/*.o' >> .hgignore
 	@echo 'dep/*.d' >> .hgignore
@@ -412,7 +396,6 @@ init:
 	@echo ''													>> src/version.h.in
 	@echo '#define VER_MAJOR				@@majorver@@'		>> src/version.h.in
 	@echo '#define VER_MINOR				@@minorver@@'		>> src/version.h.in
-	@echo '#define VER_BUILDNUM			@@buildnum@@'			>> src/version.h.in
 	@echo '#define VER_EXTRA				"@@extraver@@"'		>> src/version.h.in
 	@echo '#define VER_VCSREV				"@@vcsstr@@"'		>> src/version.h.in
 	@echo ''													>> src/version.h.in
@@ -453,11 +436,11 @@ endif
 ####
 ## musashi build rules
 # 68k CPU builder
-obj/musashi/m68kmake:	obj/musashi/m68kmake.o
-	$(CC) $(CFLAGS) $(CPPFLAGS) obj/musashi/m68kmake.o -o $@
+obj/m68kmake:	obj/m68kmake.o
+	$(CC) $(CFLAGS) $(CPPFLAGS) obj/m68kmake.o -o $@
 # 68k CPU sources
-src/musashi/m68kops.h src/musashi/m68kops.c src/musashi/m68kopac.c src/musashi/m68kopdm.c src/musashi/m68kopnz.c:	obj/musashi/m68kmake src/musashi/m68k_in.c
-	./obj/musashi/m68kmake src/musashi src/musashi/m68k_in.c
+src/m68kops.h src/m68kops.c:	obj/m68kmake src/m68k_in.c
+	./obj/m68kmake src src/m68k_in.c
 
 ####
 # make object files from C source files

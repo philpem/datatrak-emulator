@@ -1,0 +1,8 @@
+syntax: glob
+obj/**/*.o
+dep/**/*.d
+*~
+.*.sw?
+src/version.h
+obj/m68kmake
+emutrak
