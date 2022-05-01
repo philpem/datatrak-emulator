@@ -26,10 +26,10 @@
 #define RAM_BASE 0x200000
 
 /// RAM window (limit of address space allocated to RAM)
-#define RAM_WINDOW ((128*1024)-1)
+#define RAM_WINDOW ((256*1024)-1)
 
 /// RAM physical length
-#define RAM_LENGTH (128*1024)
+#define RAM_LENGTH (256*1024)
 
 // Value to return if the CPU reads from unimplemented memory
 #ifdef UNIMPL_READS_AS_FF
@@ -543,8 +543,8 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 		return rom[address];
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_WINDOW))) {
 		return ram[(address - RAM_BASE) & (RAM_LENGTH - 1)];
-//	} else if ((address == 0x240100) || (address == 0x240101)) {
-//		return 0xff;		// FIXME 240101
+	} else if ((address == 0x240100) || (address == 0x240101)) {
+		return 0xff;		// FIXME 240101 EEPROM DATA READ REG
 	} else if ((address == 0x240200) || (address == 0x240201)) {
 		// phase register
 		return 0x00;		// FIXME PHASE REGISTER
