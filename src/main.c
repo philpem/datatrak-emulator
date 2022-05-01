@@ -59,6 +59,11 @@ volatile struct {
 	bool uart;
 } InterruptFlags;
 
+// Interrupt priority levels
+#define IPL_UART 2
+#define IPL_PHASE 4
+#define IPL_NMI 7
+
 
 const char *GetDevFromAddr(const uint32_t address)
 {
@@ -645,27 +650,47 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 /*}}}*/
 
 
+// Get current IPL with priority encoding
+int m68k_update_ipl(void)
+{
+       // Start with IPL=0, no interrupts
+       int ipl = 0;
+
+       if ((InterruptFlags.phase_tick) && (ipl < IPL_PHASE)) {
+               ipl = IPL_PHASE;
+       }
+
+       if ((InterruptFlags.uart) && (ipl < IPL_UART)) {
+               ipl = IPL_UART;
+       }
+
+       m68k_set_irq(ipl);
+}
+
+
 int m68k_irq_callback(int int_level)
 {
+	uint8_t vector = 0;
+
 	// raise 1ms tick interrupt if needed
 	if (InterruptFlags.phase_tick)
 	{
 		InterruptFlags.phase_tick = 0;
-		return 0x55;		// TODO check this interrupt number
+		vector = 0x55;		// TODO check this interrupt number
 	}
 
 	// raise UART interrupt if needed
 	if (InterruptFlags.uart)
 	{
 		InterruptFlags.uart = 0;
-		return Uart.IVR;
+		vector = Uart.IVR;
 	}
 
 	// if no further pending interrupts, clear the IRQ level
-	if (!(InterruptFlags.phase_tick || InterruptFlags.uart)) {
-		m68k_set_irq(0);
-	}
-	return 0;
+	m68k_update_ipl();
+
+	fprintf(stderr, "IVEC: %02X\n", vector);
+	return vector;
 }
 
 int main(int argc, char **argv)
@@ -767,9 +792,8 @@ int main(int argc, char **argv)
 		}
 
 		InterruptFlags.phase_tick = false;		// FIXME DEBUG - phase tick causes crash on boot
-		if (InterruptFlags.uart || InterruptFlags.phase_tick) {
-			m68k_set_irq(7);
-		}
+
+		m68k_update_ipl();
 
 		// TODO: Delay 1/TIMESLOT_FREQUENCY to make this run at real time
 		//
