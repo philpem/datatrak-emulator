@@ -791,8 +791,6 @@ int main(int argc, char **argv)
 			n++;
 		}
 
-		InterruptFlags.phase_tick = false;		// FIXME DEBUG - phase tick causes crash on boot
-
 		m68k_update_ipl();
 
 		// TODO: Delay 1/TIMESLOT_FREQUENCY to make this run at real time
