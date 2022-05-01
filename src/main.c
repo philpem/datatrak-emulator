@@ -455,7 +455,7 @@ uint8_t UartRegRead(uint32_t address)
 	switch ((address >> 1) & 0x0F) {
 		case 1:		// Status Register A
 		case 9:		// Status Register B
-			return 0xC0;		// TxRDY on, TxEMT on
+			return 0x0C;		// TxRDY on, TxEMT on, RxRDY off
 
 		case 5:		// Interrupt status register
 			return 0x11;	// Channel A TXRDY, Channel B TXRDY
