@@ -29,7 +29,17 @@
 
 #include "uart.h"
 
+
+// TCP port for the UART comm port
 #define UART_PORT 10000
+
+// Define to enable register r/w debug messages
+// #define UART_DEBUG_MSGS
+
+// Log state changes of the UART output port
+// #define LOG_UART_OUTPORT
+
+
 
 uart_s Uart;
 
@@ -175,9 +185,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 		"rsvd 15"
 	};
 
+#ifdef UART_DEBUG_MSGS
 	fprintf(stderr, "[UART WR-8] <%s> 0x%08x => 0x%02x, pc=%08X\n",
 			GetUartRegFromAddr(address, false),
 			address, value, m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
 
 	switch ((address / 2) & 0x0F) {
 		case 2:		// Command Register A
@@ -381,8 +393,10 @@ uint8_t UartRegRead(uint32_t address)
 			break;
 	}
 
+#ifdef UART_DEBUG_MSGS
 	fprintf(stderr, "[UART RD-8] <%s> 0x%08x => 0x%02x, pc=%08X\n",
 			GetUartRegFromAddr(address, true),
 			address, val, m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
 	return val;
 }
