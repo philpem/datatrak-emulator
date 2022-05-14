@@ -146,7 +146,7 @@ EXT_OBJ		=
 
 # List of libraries to link in -- these will be specified as "-l" parameters,
 # the '-l' is prepended automatically
-LIB			=
+LIB			=	m
 
 # List of libraries handled by pkg-config
 LIBPKGC		=

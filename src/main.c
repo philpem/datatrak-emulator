@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <malloc.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -39,6 +40,77 @@ volatile InterruptFlags_s InterruptFlags;
 #define IPL_UART 2
 #define IPL_PHASE 4
 #define IPL_NMI 7
+
+
+// Phase-mod data generation
+
+void fillPhasebuf(void);
+
+uint16_t phasebuf[1680];
+size_t phasebuf_rpos = 0;
+
+
+uint16_t trig_50_template[40];
+uint16_t trig_375_template[40];
+
+void initPhasegen(void)
+{
+	// 40ms at 1kHz sample rate = 40 samples
+	const double nSamples = 1000.0 * 40.0e-3;
+
+	// output value scale and offset
+	const double scale = 499.0;
+	const double ofs = 499.0;
+
+	for (int i=0; i < 40; i++) {
+		// 50Hz trigger is 2 cycles of 50Hz
+		trig_50_template[i] = sin((double)i / nSamples * M_PI * 2.0 * 2.0) * scale + ofs;
+		// 37.5Hz trigger is 1.5 cycles of 37.5Hz with 180-degree phase offset
+		trig_375_template[i] = sin(((double)i / nSamples * M_PI * 2.0 * 1.5) + M_PI) * scale + ofs;
+
+		printf("%d,%d,%d\n", i, trig_50_template[i], trig_375_template[i]);
+	}
+
+	exit(1);
+
+	// do the initial buffer fill
+	fillPhasebuf(); 
+}
+
+const uint32_t GOLDCODE[] = {0xFA9B8700, 0xAE32BD97};
+size_t goldcode_n = 0;
+
+void fillPhasebuf(void)
+{
+	const uint16_t ZERO_PHASE = 500;
+
+	uint8_t goldcode_word = (goldcode_n / 32);
+	uint8_t goldcode_bit = (goldcode_n % 32);
+
+	for (size_t i=0; i<1680; i++) {
+		if (i < 45) {							// AA1 and S - 40ms
+			phasebuf[i] = ZERO_PHASE;
+		} else if ((i >= 45) && (i < 85)) {		// TRIGGER
+			// -- Trigger (Gold Code) --
+			if (GOLDCODE[goldcode_word] & (1<<goldcode_bit)) {
+				// bit is a '1'
+				phasebuf[i] = trig_375_template[i-45];
+			} else {
+				// bit is a '0'
+				phasebuf[i] = trig_50_template[i-45];
+			}
+		} else {
+			phasebuf[i] = ZERO_PHASE;
+		}
+	}
+
+	// advance to next period
+	goldcode_n++;
+	if (goldcode_n == 64) {
+		// TODO advance clock
+		goldcode_n = 0;
+	}
+}
 
 
 const char *GetDevFromAddr(const uint32_t address)
@@ -162,11 +234,27 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 		return ram[(address - RAM_BASE) & (RAM_LENGTH - 1)];
 	} else if ((address == 0x240100) || (address == 0x240101)) {
 		return 0xff;		// FIXME 240101 EEPROM DATA READ REG
-	} else if ((address == 0x240200) || (address == 0x240201)) {
-		// phase register
-		return 0x00;		// FIXME PHASE REGISTER
+	} else if (address == 0x240200) {
+		printf("\nPHASE\n");
+		// phase register high
+		// this causes an autoincrement
+
+		uint8_t val = phasebuf[phasebuf_rpos] >> 8; 
+		phasebuf_rpos++;
+
+		// emptied the buffer
+		if (phasebuf_rpos >= 1680) {
+			phasebuf_rpos = 0;
+			fillPhasebuf();
+		}
+		return val;
+	} else if (address == 0x240201) {
+		// phase register low -- this is read first
+		return phasebuf[phasebuf_rpos] & 0xFF;
 	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
 		return UartRegRead(address);
+
+		// 240401 -- Alarm port
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
@@ -369,6 +457,9 @@ int main(int argc, char **argv)
 
 	// Init the debug UART
 	UartInit();
+
+	// Init the phase modulation engine
+	initPhasegen();
 
 	// Boot the 68000
 	//
