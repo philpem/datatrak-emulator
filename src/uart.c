@@ -193,11 +193,12 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 	switch ((address / 2) & 0x0F) {
 		case 2:		// Command Register A
+#ifdef UART_DEBUG_MSGS
 			printf("UART CRA -->  RxEn %s  TxEn %s  Cmd:%s\n",
 					ENDIS[value & 0x03],
 					ENDIS[(value >> 2) & 0x03],
 					CMDS[(value >> 4) & 0x0F]);
-
+#endif
 			switch (value & 0x03) {
 				case 0:	// RX unchanged
 					break;
@@ -250,7 +251,9 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			break;
 
 		case 3:		// Transmit holding register A
+#ifdef UART_DEBUG_MSGS
 			printf("UARTA --> %c  [%02x]\n", value, value);
+#endif
 			if (Uart.SocketA > 0) {
 				if (send(Uart.SocketA, &value, 1, 0) != 1) {
 					die("Mismatch in number of sent bytes (UARTA)");
@@ -266,8 +269,10 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 
 		case 5:			// Interrupt mask register
-			fprintf(stderr, "UART IMR = %02X  --> ", value);
 			Uart.IMR = value;
+
+#ifdef UART_DEBUG_MSGS
+			fprintf(stderr, "UART IMR = %02X  --> ", value);
 			if (Uart.IMR & 0x80) fprintf(stderr, "InPortChng ");
 			if (Uart.IMR & 0x40) fprintf(stderr, "DeltaBrkB ");
 			if (Uart.IMR & 0x20) fprintf(stderr, "RxRdy/FFullB ");
@@ -277,6 +282,7 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			if (Uart.IMR & 0x02) fprintf(stderr, "RxRdy/FFullA ");
 			if (Uart.IMR & 0x01) fprintf(stderr, "TxRdyA ");
 			fprintf(stderr, "\n");
+#endif
 
 			// If TX interrupt is enabled, pend one (transmit buffer clear)
 			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10)) {
@@ -286,11 +292,12 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 
 		case 10:		// Command Register B
+#ifdef UART_DEBUG_MSGS
 			printf("UART CRB -->  RxEn %s  TxEn %s  Cmd:%s\n",
 					ENDIS[value & 0x03],
 					ENDIS[(value >> 2) & 0x03],
 					CMDS[(value >> 4) & 0x0F]);
-
+#endif
 			switch (value & 0x03) {
 				case 0:	// RX unchanged
 					break;
@@ -343,7 +350,9 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			break;
 
 		case 11:	// Transmit holding register B
+#ifdef UART_DEBUG_MSGS
 			printf("UARTB --> %c  [%02x]\n", value, value);
+#endif
 			if (Uart.SocketB > 0) {
 				if (send(Uart.SocketB, &value, 1, 0) != 1) {
 					die("Mismatch in number of sent bytes (UARTB)");
@@ -354,7 +363,9 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 		case 12:	// Interrupt vector register
 			Uart.IVR = value;
+#ifdef UART_DEBUG_MSGS
 			printf("UART Int Vec = 0x%02X\n", Uart.IVR);
+#endif
 			break;
 
 
