@@ -21,11 +21,13 @@
 // Define this to log unhandled memory accesses
 #define LOG_UNHANDLED
 
-// Log state changes of the UART output port
-// #define LOG_UART_OUTPORT
+// Define this to log interrupt vector numbers when an interrupt is triggered
+// #define LOG_INTERRPUT_VECTOR
 
 // Suppress logging from noisy unimplemented devices
 #define LOG_SILENCE_240800
+#define LOG_SILENCE_ADC
+
 
 // System ROM
 uint8_t rom[ROM_LENGTH];
@@ -37,9 +39,13 @@ uint8_t ram[RAM_LENGTH];
 volatile InterruptFlags_s InterruptFlags;
 
 // Interrupt priority levels
-#define IPL_UART 2
-#define IPL_PHASE 4
-#define IPL_NMI 7
+#define IPL_UART	2
+#define IPL_PHASE	4
+#define IPL_NMI		7
+
+// Interrupt vector numbers
+// Phase tick could be interrupt 85, 170 or 255 -- all go to the same handler
+#define	IVEC_PHASE_TICK		255
 
 
 // Phase-mod data generation
@@ -67,11 +73,7 @@ void initPhasegen(void)
 		trig_50_template[i] = sin((double)i / nSamples * M_PI * 2.0 * 2.0) * scale + ofs;
 		// 37.5Hz trigger is 1.5 cycles of 37.5Hz with 180-degree phase offset
 		trig_375_template[i] = sin(((double)i / nSamples * M_PI * 2.0 * 1.5) + M_PI) * scale + ofs;
-
-		printf("%d,%d,%d\n", i, trig_50_template[i], trig_375_template[i]);
 	}
-
-	exit(1);
 
 	// do the initial buffer fill
 	fillPhasebuf(); 
@@ -195,7 +197,7 @@ uint32_t m68k_read_memory_32(uint32_t address)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "RD32 UNHANDLED [%-9s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "RD32 UNHANDLED [%-12s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 		return UNIMPLEMENTED_VALUE;
 	}
@@ -208,9 +210,25 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 		return WORD_READ(rom, address);
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_WINDOW))) {
 		return WORD_READ(ram, (address - RAM_BASE) & (RAM_LENGTH - 1));
-	} else if ((address == 0x240200) || (address == 0x240201)) {
-		// phase register
-		return 0xff;		// FIXME PHASE REGISTER
+	} else if (address == 0x240200) {
+#ifdef LOG_PHASE_REG
+		printf("\nPHASE_L RD16\n");
+#endif
+		// phase register low
+		// the firmware usually does a 16bit read of this
+
+		// this causes an autoincrement
+
+		uint8_t val = phasebuf[phasebuf_rpos] >> 8; 
+		phasebuf_rpos++;
+
+		// emptied the buffer
+		if (phasebuf_rpos >= 1680) {
+			phasebuf_rpos = 0;
+			fillPhasebuf();
+		}
+		
+		return val;
 	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
 		fprintf(stderr, "RD16 %s <%s> 0x%08x UNIMPLEMENTED_RWSIZE, pc=%08X\n",
 				GetDevFromAddr(address), GetUartRegFromAddr(address, true),
@@ -219,7 +237,7 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "RD16 UNHANDLED [%-9s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "RD16 UNHANDLED [%-12s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 		return UNIMPLEMENTED_VALUE & 0xFFFF;
 	}
@@ -235,8 +253,10 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 	} else if ((address == 0x240100) || (address == 0x240101)) {
 		return 0xff;		// FIXME 240101 EEPROM DATA READ REG
 	} else if (address == 0x240200) {
-		printf("\nPHASE\n");
-		// phase register high
+#ifdef LOG_PHASE_REG
+		printf("\nPHASE_L RD8\n");
+#endif
+		// phase register low
 		// this causes an autoincrement
 
 		uint8_t val = phasebuf[phasebuf_rpos] >> 8; 
@@ -247,18 +267,28 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 			phasebuf_rpos = 0;
 			fillPhasebuf();
 		}
+		
 		return val;
 	} else if (address == 0x240201) {
-		// phase register low -- this is read first
+#ifdef LOG_PHASE_REG
+		// phase register high -- this is read first
+		printf("\nPHASE_H RD8\n");
+#endif
 		return phasebuf[phasebuf_rpos] & 0xFF;
 	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
 		return UartRegRead(address);
 
 		// 240401 -- Alarm port
+#ifdef LOG_SILENCE_ADC
+	} else if ((address == 0x240000) || (address == 0x240001)) {
+		// FIXME UNHANDLED 2400xx ADC
+	} else if ((address == 0x240700) || (address == 0x240701)) {
+		// FIXME UNHANDLED 2407xx ADC CHANNEL SELECT
+#endif
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "RD-8 UNHANDLED [%-9s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "RD-8 UNHANDLED [%-12s] 0x%08x ignored, pc=%08X\n", GetDevFromAddr(address), address, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 		return UNIMPLEMENTED_VALUE & 0xFF;
 	}
@@ -282,7 +312,7 @@ void m68k_write_memory_32(unsigned int address, unsigned int value)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "WR32 UNHANDLED [%-9s] 0x%08x => 0x%08X ignored, pc=%08X\n", GetDevFromAddr(address), address, value, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "WR32 UNHANDLED [%-12s] 0x%08x => 0x%08X ignored, pc=%08X\n", GetDevFromAddr(address), address, value, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 	}
 }
@@ -307,7 +337,7 @@ void m68k_write_memory_16(unsigned int address, unsigned int value)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "WR16 UNHANDLED [%-9s] 0x%08x => 0x%04X ignored, pc=%08X\n", GetDevFromAddr(address), address, value, m68k_get_reg(NULL, M68K_REG_PPC));
+		fprintf(stderr, "WR16 UNHANDLED [%-12s] 0x%08x => 0x%04X ignored, pc=%08X\n", GetDevFromAddr(address), address, value, m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
 	}
 }
@@ -328,6 +358,12 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
 		// UART -- SCC68692
 		UartRegWrite(address, value);
+#ifdef LOG_SILENCE_ADC
+	} else if ((address == 0x240000) || (address == 0x240001)) {
+		// FIXME UNHANDLED 2400xx ADC
+	} else if ((address == 0x240700) || (address == 0x240701)) {
+		// FIXME UNHANDLED 2407xx ADC CHANNEL SELECT
+#endif
 #ifdef LOG_SILENCE_240800
 	} else if ((address == 0x240800) || (address == 0x240801)) {
 		// FIXME UNHANDLED 2408xx
@@ -335,7 +371,7 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
-		fprintf(stderr, "WR-8 UNHANDLED [%-9s] 0x%08x => 0x%02X '%c' ignored, pc=%08X\n",
+		fprintf(stderr, "WR-8 UNHANDLED [%-12s] 0x%08x => 0x%02X '%c' ignored, pc=%08X\n",
 				GetDevFromAddr(address), address, value,
 				isprint(value) ? value : '.', m68k_get_reg(NULL, M68K_REG_PPC));
 #endif
@@ -351,11 +387,11 @@ void m68k_update_ipl(void)
        int ipl = 0;
 
        if ((InterruptFlags.phase_tick) && (ipl < IPL_PHASE)) {
-               ipl = IPL_PHASE;
+		   ipl = IPL_PHASE;
        }
 
-       if ((InterruptFlags.uart) && (ipl < IPL_UART)) {
-               ipl = IPL_UART;
+       else if ((InterruptFlags.uart) && (ipl < IPL_UART)) {
+		   ipl = IPL_UART;
        }
 
        m68k_set_irq(ipl);
@@ -364,26 +400,29 @@ void m68k_update_ipl(void)
 
 int m68k_irq_callback(int int_level)
 {
-	uint8_t vector = 0;
+	uint8_t vector = M68K_INT_ACK_SPURIOUS;
 
 	// raise 1ms tick interrupt if needed
 	if (InterruptFlags.phase_tick)
 	{
-		InterruptFlags.phase_tick = 0;
-		vector = 0x55;		// TODO check this interrupt number
+		InterruptFlags.phase_tick = false;
+		vector = IVEC_PHASE_TICK;
 	}
 
 	// raise UART interrupt if needed
-	if (InterruptFlags.uart)
+	else if (InterruptFlags.uart)
 	{
-		InterruptFlags.uart = 0;
+		InterruptFlags.uart = false;
 		vector = Uart.IVR;
 	}
 
-	// if no further pending interrupts, clear the IRQ level
 	m68k_update_ipl();
 
-	fprintf(stderr, "IVEC: %02X\n", vector);
+#ifdef LOG_INTERRPUT_VECTOR
+	if (vector != Uart.IVR) {
+		fprintf(stderr, "IVEC: %02X\n", vector);
+	}
+#endif
 	return vector;
 }
 
