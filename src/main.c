@@ -40,7 +40,7 @@ volatile InterruptFlags_s InterruptFlags;
 
 // Interrupt priority levels
 #define IPL_UART	2
-#define IPL_PHASE	4
+#define IPL_PHASE	5
 #define IPL_NMI		7
 
 // Interrupt vector numbers
