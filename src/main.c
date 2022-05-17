@@ -400,7 +400,7 @@ void m68k_update_ipl(void)
 
 int m68k_irq_callback(int int_level)
 {
-	uint8_t vector = M68K_INT_ACK_SPURIOUS;
+	int vector = M68K_INT_ACK_SPURIOUS;
 
 	// raise 1ms tick interrupt if needed
 	if (InterruptFlags.phase_tick)
