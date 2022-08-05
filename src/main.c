@@ -50,30 +50,71 @@ volatile InterruptFlags_s InterruptFlags;
 
 // Phase-mod data generation
 
+#define PHASE_PER_CYCLE 1680
+
 void fillPhasebuf(void);
 
-uint16_t phasebuf[1680];
+uint16_t phasebuf[PHASE_PER_CYCLE];
 size_t phasebuf_rpos = 0;
 
 
+#define PHASE_ZERO 499
+#define PHASE_PEAK 499
+
+// Trigger templates
 uint16_t trig_50_template[40];
 uint16_t trig_375_template[40];
 
+
+// Trigger templates from the Datatrak firmware
+int16_t DT_TRIG50_TEMPLATE[40] = {
+	  54,    124,    181,    218,
+	 232,    221,    185,    129,
+	  59,    -21,    -99,   -169,
+	-223,   -257,   -265,   -250,
+	-210,   -150,    -76,      6,
+	  87,    159,    215,    249,
+	 260,    245,    206,    147,
+	  74,     -8,    -89,   -160,
+	-216,   -251,   -261,   -245,
+	-207,   -148,    -74,      8
+};
+int16_t DT_TRIG375_TEMPLATE[40] = {
+	 -43,    -98,   -144,   -181,
+	-203,   -212,   -204,   -183,
+	-149,   -106,    -53,      4,
+	  62,    118,    168,    210,
+ 	 240,    258,    263,    253,
+	 229,    193,    147,     93,
+	  33,    -28,    -88,   -143,
+	-189,   -225,   -248,   -258,
+	-254,   -236,   -204,   -162,
+	-110,    -53,      9,     69
+};
+
 void initPhasegen(void)
 {
+#ifdef GENERATE_TRIGGER
 	// 40ms at 1kHz sample rate = 40 samples
-	const double nSamples = 1000.0 * 40.0e-3;
-
-	// output value scale and offset
-	const double scale = 499.0;
-	const double ofs = 499.0;
-
+	const double nSamples = 40.0; // 1000.0 * 40.0e-3;
+# warning "Generating Trigger from scratch"
 	for (int i=0; i < 40; i++) {
 		// 50Hz trigger is 2 cycles of 50Hz
-		trig_50_template[i] = sin((double)i / nSamples * M_PI * 2.0 * 2.0) * scale + ofs;
+		trig_50_template[i] = trunc(sin((double)(i) / nSamples * M_PI * 2.0 * 2.0) * PHASE_PEAK + PHASE_ZERO);
 		// 37.5Hz trigger is 1.5 cycles of 37.5Hz with 180-degree phase offset
-		trig_375_template[i] = sin(((double)i / nSamples * M_PI * 2.0 * 1.5) + M_PI) * scale + ofs;
+		trig_375_template[i] = trunc(sin(((double)(i) / nSamples * M_PI * 2.0 * 1.5) + M_PI) PHASE_PEAK + PHASE_ZERO);
 	}
+#else
+# warning "Generating Trigger from rescaled firmware values"
+	const double scale = 1.73;	// 1.73 gives the best trigger match quality (705)
+								// 500 peak = 289 after scaling, what's going on?
+	
+	for (int i=0; i < 40; i++) {
+		// Re-scale the firmware templates - convert from signed-around-zero to unsigned 0-1000
+		trig_50_template[i] = trunc((double)(DT_TRIG50_TEMPLATE[i]) * scale + PHASE_ZERO);
+		trig_375_template[i] = trunc((double)(DT_TRIG375_TEMPLATE[i]) * scale + PHASE_ZERO);
+	}
+#endif
 
 	// do the initial buffer fill
 	fillPhasebuf(); 
@@ -84,25 +125,23 @@ size_t goldcode_n = 0;
 
 void fillPhasebuf(void)
 {
-	const uint16_t ZERO_PHASE = 500;
-
 	uint8_t goldcode_word = (goldcode_n / 32);
 	uint8_t goldcode_bit = (goldcode_n % 32);
 
-	for (size_t i=0; i<1680; i++) {
+	for (size_t i=0; i<PHASE_PER_CYCLE; i++) {
 		if (i < 45) {							// AA1 and S - 40ms
-			phasebuf[i] = ZERO_PHASE;
+			phasebuf[i] = PHASE_ZERO;
 		} else if ((i >= 45) && (i < 85)) {		// TRIGGER
 			// -- Trigger (Gold Code) --
 			if (GOLDCODE[goldcode_word] & (1<<goldcode_bit)) {
 				// bit is a '1'
-				phasebuf[i] = trig_375_template[i-45];
+				phasebuf[i] = roundf(trig_375_template[i-45] * 1);
 			} else {
 				// bit is a '0'
-				phasebuf[i] = trig_50_template[i-45];
+				phasebuf[i] = roundf(trig_50_template[i-45] * 1);
 			}
 		} else {
-			phasebuf[i] = ZERO_PHASE;
+			phasebuf[i] = PHASE_ZERO;
 		}
 	}
 
@@ -223,7 +262,7 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 		phasebuf_rpos++;
 
 		// emptied the buffer
-		if (phasebuf_rpos >= 1680) {
+		if (phasebuf_rpos >= PHASE_PER_CYCLE) {
 			phasebuf_rpos = 0;
 			fillPhasebuf();
 		}
@@ -246,6 +285,10 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 
 uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 {
+	if (address == 0x2CC96) {
+		printf("*** 2cc96 trap -> pc = %08X\n", m68k_get_reg(NULL, M68K_REG_PC));
+	}
+
 	if (address < ROM_LENGTH) {
 		return rom[address];
 	} else if ((address >= RAM_BASE) && (address < (RAM_BASE + RAM_WINDOW))) {
@@ -263,7 +306,7 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 		phasebuf_rpos++;
 
 		// emptied the buffer
-		if (phasebuf_rpos >= 1680) {
+		if (phasebuf_rpos >= PHASE_PER_CYCLE) {
 			phasebuf_rpos = 0;
 			fillPhasebuf();
 		}
@@ -282,8 +325,10 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 #ifdef LOG_SILENCE_ADC
 	} else if ((address == 0x240000) || (address == 0x240001)) {
 		// FIXME UNHANDLED 2400xx ADC
+		return UNIMPLEMENTED_VALUE & 0xFF;
 	} else if ((address == 0x240700) || (address == 0x240701)) {
 		// FIXME UNHANDLED 2407xx ADC CHANNEL SELECT
+		return UNIMPLEMENTED_VALUE & 0xFF;
 #endif
 	} else {
 		// log unhandled access
@@ -368,6 +413,8 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 	} else if ((address == 0x240800) || (address == 0x240801)) {
 		// FIXME UNHANDLED 2408xx
 #endif
+	} else if ((address >= 0x240000) && (address <= 0x24FFFF)) {
+		fprintf(stderr, "WR-8 to ASIC 0x%08X => 0x%02X, pc=%08X\n", address, value, m68k_get_reg(NULL, M68K_REG_PPC));
 	} else {
 		// log unhandled access
 #ifdef LOG_UNHANDLED
@@ -429,6 +476,7 @@ int m68k_irq_callback(int int_level)
 int main(int argc, char **argv)
 {
 	// Load ROM. Order is: A byte from IC2, then a byte from IC1.
+#if 1
 	{
 		FILE *oddf, *evenf;
 		uint8_t *evenbuf, *oddbuf;
@@ -493,6 +541,14 @@ int main(int argc, char **argv)
 		free(oddbuf);
 		free(evenbuf);
 	}
+#else
+	// load TUTOR monitor rom
+	{
+		FILE *f = fopen("./monitor_rom/tutor13.bin", "rb");
+		fread(rom, 1, sizeof(rom), f);
+		fclose(f);
+	}
+#endif
 
 	// Init the debug UART
 	UartInit();
@@ -512,20 +568,14 @@ int main(int argc, char **argv)
 	m68k_pulse_reset();
 
 	uint32_t clock_cycles = 0;
-	uint32_t n=0;
 
 	for (;;) {
 		// Run one tick interrupt worth of instructions
 		uint32_t tmp = m68k_execute(CLOCKS_PER_INTERRUPT);
 		clock_cycles += tmp;
 
-		if (n > 10) {
-			// Trigger a tick interrupt
-			//fprintf(stderr, "***TICK***\n");
-			InterruptFlags.phase_tick = true;
-		} else {
-			n++;
-		}
+		// Trigger a tick interrupt
+		InterruptFlags.phase_tick = true;
 
 		m68k_update_ipl();
 
