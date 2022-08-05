@@ -6,3 +6,4 @@ dep/**/*.d
 src/version.h
 obj/m68kmake
 emutrak
+src/m68kops.[ch]
