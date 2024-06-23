@@ -122,6 +122,7 @@ void initPhasegen(void)
 
 const uint32_t GOLDCODE[] = {0xFA9B8700, 0xAE32BD97};
 size_t goldcode_n = 0;
+size_t clock_n = 12345;
 
 void fillPhasebuf(void)
 {
@@ -140,6 +141,19 @@ void fillPhasebuf(void)
 				// bit is a '0'
 				phasebuf[i] = roundf(trig_50_template[i-45] * 1);
 			}
+		} else if ((i >= 95) && (i < 115)) {
+			// -- Clock --
+			int bit_n = (goldcode_n % 8) * 2;
+			int bits = (clock_n >> bit_n) & 3;
+			if (goldcode_n >= 32) bits = bits ^ 3;
+			int pha;
+			switch(bits) {
+				case 0: pha = 0; break;
+				case 1: pha = 5; break;
+				case 2: pha = 15; break;
+				case 3: pha = 10; break;
+			}
+			phasebuf[i] = roundf(trig_50_template[((i-95)+pha) % 20] * 0.5);
 		} else {
 			phasebuf[i] = PHASE_ZERO;
 		}
