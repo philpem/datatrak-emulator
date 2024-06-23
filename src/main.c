@@ -162,8 +162,8 @@ void fillPhasebuf(void)
 	// advance to next period
 	goldcode_n++;
 	if (goldcode_n == 64) {
-		// TODO advance clock
 		goldcode_n = 0;
+		clock_n++;
 	}
 }
 
