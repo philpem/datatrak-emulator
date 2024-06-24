@@ -28,6 +28,10 @@
 #define LOG_SILENCE_240800
 #define LOG_SILENCE_ADC
 
+// Debug: write modulated (audible) phase data to a file. Data format is 16bit signed, mono, 44100 Hz.
+//#define WRITE_PHASEDATA_MODULATED
+// Debug: write raw phase data to a file. Data format is 16bit signed, mono, 44100 Hz.
+//#define WRITE_PHASEDATA
 
 // System ROM
 uint8_t rom[ROM_LENGTH];
@@ -53,6 +57,7 @@ volatile InterruptFlags_s InterruptFlags;
 #define PHASE_PER_CYCLE 1680
 
 void fillPhasebuf(void);
+void writeSynthPhasebuf(void);
 
 uint16_t phasebuf[PHASE_PER_CYCLE];
 size_t phasebuf_rpos = 0;
@@ -142,6 +147,8 @@ void fillPhasebuf(void)
 				phasebuf[i] = roundf(trig_50_template[i-45] * 1);
 			}
 		} else if ((i >= 95) && (i < 115)) {
+			const float CLOCK_AMPL = 0.5;
+
 			// -- Clock --
 			int bit_n = (goldcode_n % 8) * 2;
 			int bits = (clock_n >> bit_n) & 3;
@@ -153,7 +160,7 @@ void fillPhasebuf(void)
 				case 2: pha = 15; break;
 				case 3: pha = 10; break;
 			}
-			phasebuf[i] = roundf(trig_50_template[((i-95)+pha) % 20] * 0.5);
+			phasebuf[i] = roundf((trig_50_template[((i-95)+pha) % 20] * CLOCK_AMPL) + (PHASE_ZERO * (1.0 - CLOCK_AMPL)));
 		} else {
 			phasebuf[i] = PHASE_ZERO;
 		}
@@ -165,8 +172,48 @@ void fillPhasebuf(void)
 		goldcode_n = 0;
 		clock_n++;
 	}
+
+#if defined(WRITE_PHASEDATA_MODULATED) || defined(WRITE_PHASEDATA)
+	writeSynthPhasebuf();
+#endif
 }
 
+#if defined(WRITE_PHASEDATA_MODULATED) || defined(WRITE_PHASEDATA)
+float phi = 0;
+void writeSynthPhasebuf(void)
+{
+	FILE *fp = fopen("phasedata_synth.raw", "ab");
+
+	const double SAMPLERATE = 44100;
+	const double FREQUENCY  = 1000;
+	const double AMPLITUDE  = 32767 * 0.25;
+
+	const size_t SAMPLES_PER_MS = SAMPLERATE/1000;
+
+	int16_t samp[SAMPLES_PER_MS];
+	double theta = (2.0 * M_PI) * FREQUENCY / SAMPLERATE;
+	int last_ph = PHASE_ZERO;
+	for (size_t msec = 0; msec < PHASE_PER_CYCLE; msec++) {
+		for (size_t s = 0; s < SAMPLES_PER_MS; s++) {
+			// calculate phase shift from last cycle to this
+			double ph_sh = (((int)phasebuf[msec] - last_ph) / (double)PHASE_AMPL) * (2.0 * M_PI);
+			last_ph = phasebuf[msec];
+
+			// update phase
+			phi = phi + theta + ph_sh;
+
+			// generate sine point
+			samp[s] = roundf(AMPLITUDE * sin(phi));
+#ifndef WRITE_PHASEDATA_MODULATED
+			// output raw phase data instead
+			samp[s] = ((int)phasebuf[msec] - PHASE_ZERO) * 32;
+#endif
+		}
+		fwrite(samp, sizeof(int16_t), SAMPLES_PER_MS, fp);
+	}
+	fclose(fp);
+}
+#endif
 
 const char *GetDevFromAddr(const uint32_t address)
 {
