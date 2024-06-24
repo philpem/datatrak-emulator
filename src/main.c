@@ -59,7 +59,7 @@ size_t phasebuf_rpos = 0;
 
 
 #define PHASE_ZERO 499
-#define PHASE_PEAK 499
+#define PHASE_AMPL 499
 
 // Trigger templates
 uint16_t trig_50_template[40];
@@ -100,9 +100,9 @@ void initPhasegen(void)
 # warning "Generating Trigger from scratch"
 	for (int i=0; i < 40; i++) {
 		// 50Hz trigger is 2 cycles of 50Hz
-		trig_50_template[i] = trunc(sin((double)(i) / nSamples * M_PI * 2.0 * 2.0) * PHASE_PEAK + PHASE_ZERO);
+		trig_50_template[i] = trunc(sin((double)(i) / nSamples * M_PI * 2.0 * 2.0) * PHASE_AMPL + PHASE_ZERO);
 		// 37.5Hz trigger is 1.5 cycles of 37.5Hz with 180-degree phase offset
-		trig_375_template[i] = trunc(sin(((double)(i) / nSamples * M_PI * 2.0 * 1.5) + M_PI) PHASE_PEAK + PHASE_ZERO);
+		trig_375_template[i] = trunc(sin(((double)(i) / nSamples * M_PI * 2.0 * 1.5) + M_PI) PHASE_AMPL + PHASE_ZERO);
 	}
 #else
 # warning "Generating Trigger from rescaled firmware values"
@@ -188,16 +188,36 @@ const char *GetDevFromAddr(const uint32_t address)
 				return "UART";
 				break;
 
+			case 0x240400:
+				return "8051 I/O";
+				break;
+
 			case 0x240500:
-				return "UNK 24:05";
+				return "F1/F2 FREQ SET";
+				break;
+
+			case 0x240600:
+				return "F1+/F2+ FREQ SET";
 				break;
 
 			case 0x240700:
-				return "ADCON CHSEL";		// write 240701
+				return "ADCON CHSEL (DIGOP1)";		// write 240701
 				break;
 
 			case 0x240800:
-				return "EEPROM WRIO";		// write 240801 from pc=0001FC22, pc=0001FC2C, pc=0001FCB6, pc=0001FC44, pc=0001FC52, pc=0001FC6C
+				return "EEPROM WRIO (DIGOP2)";		// write 240801 from pc=0001FC22, pc=0001FC2C, pc=0001FCB6, pc=0001FC44, pc=0001FC52, pc=0001FC6C
+				break;
+
+			case 0x240900:
+				return "DUSC";
+				break;
+
+			case 0x240A00:
+				return "UPDOWN CNT 1";
+				break;
+
+			case 0x240B00:
+				return "UPDOWN CNT 2";
 				break;
 
 			default:
@@ -444,18 +464,18 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 // Get current IPL with priority encoding
 void m68k_update_ipl(void)
 {
-       // Start with IPL=0, no interrupts
-       int ipl = 0;
+	// Start with IPL=0, no interrupts
+	int ipl = 0;
 
-       if ((InterruptFlags.phase_tick) && (ipl < IPL_PHASE)) {
-		   ipl = IPL_PHASE;
-       }
+	if ((InterruptFlags.phase_tick) && (ipl < IPL_PHASE)) {
+		ipl = IPL_PHASE;
+	}
 
-       else if ((InterruptFlags.uart) && (ipl < IPL_UART)) {
-		   ipl = IPL_UART;
-       }
+	else if ((InterruptFlags.uart) && (ipl < IPL_UART)) {
+		ipl = IPL_UART;
+	}
 
-       m68k_set_irq(ipl);
+	m68k_set_irq(ipl);
 }
 
 
