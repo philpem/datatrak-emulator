@@ -54,7 +54,10 @@ volatile InterruptFlags_s InterruptFlags;
 
 // Phase-mod data generation
 
-#define PHASE_PER_CYCLE 1680
+// Standard Datatrak has 8 nav slots plus interlacing. Early Datatrak had 6.
+#define NAV_SLOT_COUNT 8
+// Number of phase samples per cycle, this normally ends up being 1680 for mk2 era protocol
+#define PHASE_PER_CYCLE (340 + (NAV_SLOT_COUNT * 80) + 40 + (NAV_SLOT_COUNT * 80) + 20)
 
 void fillPhasebuf(void);
 void writeSynthPhasebuf(void);
@@ -161,6 +164,83 @@ void fillPhasebuf(void)
 				case 3: pha = 10; break;
 			}
 			phasebuf[i] = roundf((trig_50_template[((i-95)+pha) % 20] * CLOCK_AMPL) + (PHASE_ZERO * (1.0 - CLOCK_AMPL)));
+
+		// AA1: 0-40ms (phase=0)
+		// Station data: 5ms gap, (20ms dibit, 5ms gap)*2 ==> (120 to 185 ms)
+		// Vehicle data: 5ms gap, (20ms dibit, 5ms gap)*4 ==> (185 to 300 ms)
+		// AA2: 300-340ms (phase=0)
+		//
+		// Navslots F1: start at 340ms, 80ms each (40ms F+, 40ms F-)
+		//
+		// G1: 40ms phase=0
+		//
+		// Navslots F2 - as F1 navslots but on F2
+		//
+		// G2: 20ms phase=0
+		//
+		// --
+		// Interlacing means that while stations 1-8 are transmitting on F1, either
+		// stations 9-16 (odd cycles) or 17-24 (even cycles) will be transmitting
+		// on F2, and vice versa.
+		//
+		// We can't implement this until we're handling F1/F2 switching.
+		//
+
+		} else if ((i >= 340) && (i < 340 + (NAV_SLOT_COUNT * 80))) {
+			// Navslots (F1)
+
+			// Navslot number (0 to 7 = slot 1 to 8)
+			int navslot_n = (i - 340) / 80;
+			// Time in the nav slot (0 to 79 ms)
+			int time_in_slot = (i - 340) % 80;
+
+			// Each navslot has 40ms of +40Hz, then 40ms of -40Hz frequency offset.
+			// We achieve this with phase rotation. One full rotation happens every 25ms.
+			// 1000 counts / 25ms = an increment of 40 counts per ms
+
+			// TODO: Allow phase offset for each slot to be set, so we can emulate navigation.
+			int slot_phase_ofs_plus  = PHASE_ZERO;
+			int slot_phase_ofs_minus = PHASE_ZERO;
+
+			if (time_in_slot < 40) {
+				// F1+ slot, phase advance.
+				phasebuf[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+			} else {
+				// F1- slot, phase delay.
+				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+				while (x < 0) x += 1000;
+				phasebuf[i] = x;
+			}
+
+		// After this, 40ms guard1 for frequency switching, then 1-8 tx on F2+/F2- for 8 slots.
+		} else if ((i >= (340 + (NAV_SLOT_COUNT * 80) + 40 /* G1 */)) && (i < (340 + (NAV_SLOT_COUNT * 80) + 40 + (NAV_SLOT_COUNT * 80)))) {
+			// Navslots (F2)
+
+			// Navslot number (0 to 7 = slot 1 to 8)
+			int navslot_n = (i - 340 - (NAV_SLOT_COUNT * 80) - 40) / 80;
+
+			// Time in the nav slot (0 to 79 ms)
+			int time_in_slot = (i - 340 - (NAV_SLOT_COUNT * 80) - 40) % 80;
+
+			// Each navslot has 40ms of +40Hz, then 40ms of -40Hz frequency offset.
+			// We achieve this with phase rotation. One full rotation happens every 25ms.
+			// 1000 counts / 25ms = an increment of 40 counts per ms
+
+			// TODO: Allow phase offset for each slot to be set, so we can emulate navigation.
+			int slot_phase_ofs_plus  = PHASE_ZERO;
+			int slot_phase_ofs_minus = PHASE_ZERO;
+
+			if (time_in_slot < 40) {
+				// F2+ slot, phase advance.
+				phasebuf[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+			} else {
+				// F2- slot, phase delay.
+				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+				while (x < 0) x += 1000;
+				phasebuf[i] = x;
+			}
+
+		// After this, 20ms guard2 and we're done with the cycle
 		} else {
 			phasebuf[i] = PHASE_ZERO;
 		}
@@ -182,7 +262,11 @@ void fillPhasebuf(void)
 float phi = 0;
 void writeSynthPhasebuf(void)
 {
+#ifdef WRITE_PHASEDATA_MODULATED
 	FILE *fp = fopen("phasedata_synth.raw", "ab");
+#else
+	FILE *fp = fopen("phasedata.raw", "ab");
+#endif
 
 	const double SAMPLERATE = 44100;
 	const double FREQUENCY  = 1000;
@@ -190,9 +274,15 @@ void writeSynthPhasebuf(void)
 
 	const size_t SAMPLES_PER_MS = SAMPLERATE/1000;
 
+	// Phase shift per cycle (to generate the base modulation frequency)
+	const double theta = (2.0 * M_PI) * FREQUENCY / SAMPLERATE;
+
+	// Sample buffer
 	int16_t samp[SAMPLES_PER_MS];
-	double theta = (2.0 * M_PI) * FREQUENCY / SAMPLERATE;
+
+	// Previous phase offset
 	int last_ph = PHASE_ZERO;
+
 	for (size_t msec = 0; msec < PHASE_PER_CYCLE; msec++) {
 		for (size_t s = 0; s < SAMPLES_PER_MS; s++) {
 			// calculate phase shift from last cycle to this
