@@ -15,6 +15,8 @@
 #include "machine.h"
 #include "wordops.h"
 
+#include "datatrak_gen.h"
+
 #include "main.h"
 
 
@@ -28,6 +30,8 @@
 #define LOG_SILENCE_240800
 #define LOG_SILENCE_ADC
 
+// Generate trigger from scratch
+#define GENERATE_TRIGGER
 // Debug: write modulated (audible) phase data to a file. Data format is 16bit signed, mono, 44100 Hz.
 //#define WRITE_PHASEDATA_MODULATED
 // Debug: write raw phase data to a file. Data format is 16bit signed, mono, 44100 Hz.
@@ -51,259 +55,17 @@ volatile InterruptFlags_s InterruptFlags;
 // Phase tick could be interrupt 85, 170 or 255 -- all go to the same handler
 #define	IVEC_PHASE_TICK		255
 
-
-// Phase-mod data generation
-
-// Standard Datatrak has 8 nav slots plus interlacing. Early Datatrak had 6.
-#define NAV_SLOT_COUNT 8
-// Number of phase samples per cycle, this normally ends up being 1680 for mk2 era protocol
-#define PHASE_PER_CYCLE (340 + (NAV_SLOT_COUNT * 80) + 40 + (NAV_SLOT_COUNT * 80) + 20)
-
-void fillPhasebuf(void);
-void writeSynthPhasebuf(void);
-
-uint16_t phasebuf[PHASE_PER_CYCLE];
+// LF signal gen context and buffer
+DATATRAK_LF_CTX dtrkCtx;
+DATATRAK_OUTBUF dtrkBuf;
+// Current read position in phase buffer
 size_t phasebuf_rpos = 0;
 
-
-#define PHASE_ZERO 499
-#define PHASE_AMPL 499
-
-// Trigger templates
-uint16_t trig_50_template[40];
-uint16_t trig_375_template[40];
-
-
-// Trigger templates from the Datatrak firmware
-int16_t DT_TRIG50_TEMPLATE[40] = {
-	  54,    124,    181,    218,
-	 232,    221,    185,    129,
-	  59,    -21,    -99,   -169,
-	-223,   -257,   -265,   -250,
-	-210,   -150,    -76,      6,
-	  87,    159,    215,    249,
-	 260,    245,    206,    147,
-	  74,     -8,    -89,   -160,
-	-216,   -251,   -261,   -245,
-	-207,   -148,    -74,      8
-};
-int16_t DT_TRIG375_TEMPLATE[40] = {
-	 -43,    -98,   -144,   -181,
-	-203,   -212,   -204,   -183,
-	-149,   -106,    -53,      4,
-	  62,    118,    168,    210,
- 	 240,    258,    263,    253,
-	 229,    193,    147,     93,
-	  33,    -28,    -88,   -143,
-	-189,   -225,   -248,   -258,
-	-254,   -236,   -204,   -162,
-	-110,    -53,      9,     69
-};
-
-void initPhasegen(void)
-{
-#ifdef GENERATE_TRIGGER
-	// 40ms at 1kHz sample rate = 40 samples
-	const double nSamples = 40.0; // 1000.0 * 40.0e-3;
-# warning "Generating Trigger from scratch"
-	for (int i=0; i < 40; i++) {
-		// 50Hz trigger is 2 cycles of 50Hz
-		trig_50_template[i] = trunc(sin((double)(i) / nSamples * M_PI * 2.0 * 2.0) * PHASE_AMPL + PHASE_ZERO);
-		// 37.5Hz trigger is 1.5 cycles of 37.5Hz with 180-degree phase offset
-		trig_375_template[i] = trunc(sin(((double)(i) / nSamples * M_PI * 2.0 * 1.5) + M_PI) PHASE_AMPL + PHASE_ZERO);
-	}
-#else
-# warning "Generating Trigger from rescaled firmware values"
-	const double scale = 1.73;	// 1.73 gives the best trigger match quality (705)
-								// 500 peak = 289 after scaling, what's going on?
-	
-	for (int i=0; i < 40; i++) {
-		// Re-scale the firmware templates - convert from signed-around-zero to unsigned 0-1000
-		trig_50_template[i] = trunc((double)(DT_TRIG50_TEMPLATE[i]) * scale + PHASE_ZERO);
-		trig_375_template[i] = trunc((double)(DT_TRIG375_TEMPLATE[i]) * scale + PHASE_ZERO);
-	}
-#endif
-
-	// do the initial buffer fill
-	fillPhasebuf(); 
-}
-
-const uint32_t GOLDCODE[] = {0xFA9B8700, 0xAE32BD97};
-size_t goldcode_n = 0;
-size_t clock_n = 12345;
-
-void fillPhasebuf(void)
-{
-	uint8_t goldcode_word = (goldcode_n / 32);
-	uint8_t goldcode_bit = (goldcode_n % 32);
-
-	for (size_t i=0; i<PHASE_PER_CYCLE; i++) {
-		if (i < 45) {							// AA1 and S - 40ms
-			phasebuf[i] = PHASE_ZERO;
-		} else if ((i >= 45) && (i < 85)) {		// TRIGGER
-			// -- Trigger (Gold Code) --
-			if (GOLDCODE[goldcode_word] & (1<<goldcode_bit)) {
-				// bit is a '1'
-				phasebuf[i] = roundf(trig_375_template[i-45] * 1);
-			} else {
-				// bit is a '0'
-				phasebuf[i] = roundf(trig_50_template[i-45] * 1);
-			}
-		} else if ((i >= 95) && (i < 115)) {
-			const float CLOCK_AMPL = 0.5;
-
-			// -- Clock --
-			int bit_n = (goldcode_n % 8) * 2;
-			int bits = (clock_n >> bit_n) & 3;
-			if (goldcode_n >= 32) bits = bits ^ 3;
-			int pha;
-			switch(bits) {
-				case 0: pha = 0; break;
-				case 1: pha = 5; break;
-				case 2: pha = 15; break;
-				case 3: pha = 10; break;
-			}
-			phasebuf[i] = roundf((trig_50_template[((i-95)+pha) % 20] * CLOCK_AMPL) + (PHASE_ZERO * (1.0 - CLOCK_AMPL)));
-
-		// AA1: 0-40ms (phase=0)
-		// Station data: 5ms gap, (20ms dibit, 5ms gap)*2 ==> (120 to 185 ms)
-		// Vehicle data: 5ms gap, (20ms dibit, 5ms gap)*4 ==> (185 to 300 ms)
-		// AA2: 300-340ms (phase=0)
-		//
-		// Navslots F1: start at 340ms, 80ms each (40ms F+, 40ms F-)
-		//
-		// G1: 40ms phase=0
-		//
-		// Navslots F2 - as F1 navslots but on F2
-		//
-		// G2: 20ms phase=0
-		//
-		// --
-		// Interlacing means that while stations 1-8 are transmitting on F1, either
-		// stations 9-16 (odd cycles) or 17-24 (even cycles) will be transmitting
-		// on F2, and vice versa.
-		//
-		// We can't implement this until we're handling F1/F2 switching.
-		//
-
-		} else if ((i >= 340) && (i < 340 + (NAV_SLOT_COUNT * 80))) {
-			// Navslots (F1)
-
-			// Navslot number (0 to 7 = slot 1 to 8)
-			int navslot_n = (i - 340) / 80;
-			// Time in the nav slot (0 to 79 ms)
-			int time_in_slot = (i - 340) % 80;
-
-			// Each navslot has 40ms of +40Hz, then 40ms of -40Hz frequency offset.
-			// We achieve this with phase rotation. One full rotation happens every 25ms.
-			// 1000 counts / 25ms = an increment of 40 counts per ms
-
-			// TODO: Allow phase offset for each slot to be set, so we can emulate navigation.
-			int slot_phase_ofs_plus  = PHASE_ZERO;
-			int slot_phase_ofs_minus = PHASE_ZERO;
-
-			if (time_in_slot < 40) {
-				// F1+ slot, phase advance.
-				phasebuf[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
-			} else {
-				// F1- slot, phase delay.
-				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
-				while (x < 0) x += 1000;
-				phasebuf[i] = x;
-			}
-
-		// After this, 40ms guard1 for frequency switching, then 1-8 tx on F2+/F2- for 8 slots.
-		} else if ((i >= (340 + (NAV_SLOT_COUNT * 80) + 40 /* G1 */)) && (i < (340 + (NAV_SLOT_COUNT * 80) + 40 + (NAV_SLOT_COUNT * 80)))) {
-			// Navslots (F2)
-
-			// Navslot number (0 to 7 = slot 1 to 8)
-			int navslot_n = (i - 340 - (NAV_SLOT_COUNT * 80) - 40) / 80;
-
-			// Time in the nav slot (0 to 79 ms)
-			int time_in_slot = (i - 340 - (NAV_SLOT_COUNT * 80) - 40) % 80;
-
-			// Each navslot has 40ms of +40Hz, then 40ms of -40Hz frequency offset.
-			// We achieve this with phase rotation. One full rotation happens every 25ms.
-			// 1000 counts / 25ms = an increment of 40 counts per ms
-
-			// TODO: Allow phase offset for each slot to be set, so we can emulate navigation.
-			int slot_phase_ofs_plus  = PHASE_ZERO;
-			int slot_phase_ofs_minus = PHASE_ZERO;
-
-			if (time_in_slot < 40) {
-				// F2+ slot, phase advance.
-				phasebuf[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
-			} else {
-				// F2- slot, phase delay.
-				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
-				while (x < 0) x += 1000;
-				phasebuf[i] = x;
-			}
-
-		// After this, 20ms guard2 and we're done with the cycle
-		} else {
-			phasebuf[i] = PHASE_ZERO;
-		}
-	}
-
-	// advance to next period
-	goldcode_n++;
-	if (goldcode_n == 64) {
-		goldcode_n = 0;
-		clock_n++;
-	}
-
-#if defined(WRITE_PHASEDATA_MODULATED) || defined(WRITE_PHASEDATA)
-	writeSynthPhasebuf();
-#endif
-}
-
-#if defined(WRITE_PHASEDATA_MODULATED) || defined(WRITE_PHASEDATA)
-float phi = 0;
-void writeSynthPhasebuf(void)
-{
-#ifdef WRITE_PHASEDATA_MODULATED
-	FILE *fp = fopen("phasedata_synth.raw", "ab");
-#else
-	FILE *fp = fopen("phasedata.raw", "ab");
-#endif
-
-	const double SAMPLERATE = 44100;
-	const double FREQUENCY  = 1000;
-	const double AMPLITUDE  = 32767 * 0.25;
-
-	const size_t SAMPLES_PER_MS = SAMPLERATE/1000;
-
-	// Phase shift per cycle (to generate the base modulation frequency)
-	const double theta = (2.0 * M_PI) * FREQUENCY / SAMPLERATE;
-
-	// Sample buffer
-	int16_t samp[SAMPLES_PER_MS];
-
-	// Previous phase offset
-	int last_ph = PHASE_ZERO;
-
-	for (size_t msec = 0; msec < PHASE_PER_CYCLE; msec++) {
-		for (size_t s = 0; s < SAMPLES_PER_MS; s++) {
-			// calculate phase shift from last cycle to this
-			double ph_sh = (((int)phasebuf[msec] - last_ph) / (double)PHASE_AMPL) * (2.0 * M_PI);
-			last_ph = phasebuf[msec];
-
-			// update phase
-			phi = phi + theta + ph_sh;
-
-			// generate sine point
-			samp[s] = roundf(AMPLITUDE * sin(phi));
-#ifndef WRITE_PHASEDATA_MODULATED
-			// output raw phase data instead
-			samp[s] = ((int)phasebuf[msec] - PHASE_ZERO) * 32;
-#endif
-		}
-		fwrite(samp, sizeof(int16_t), SAMPLES_PER_MS, fp);
-	}
-	fclose(fp);
-}
-#endif
+// GPIO 240701
+// Current selected frequency (1=F1, 0=F2)
+uint8_t gpio7_freqsel = 0;
+// Current A/D converter selection (0=RSSI, 1=UHF P14, 2=5V divided by 2.5, 3=12V divided by 5.556)
+uint8_t gpio7_adsel = 0;
 
 const char *GetDevFromAddr(const uint32_t address)
 {
@@ -426,16 +188,21 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 #endif
 		// phase register low
 		// the firmware usually does a 16bit read of this
-
 		// this causes an autoincrement
 
-		uint8_t val = phasebuf[phasebuf_rpos] >> 8; 
+		// FIXME Handle RSSI readback
+		uint8_t val;
+		if (gpio7_freqsel == 1) {
+			val = dtrkBuf.f1_phase[phasebuf_rpos] >> 8;
+		} else {
+			val = dtrkBuf.f2_phase[phasebuf_rpos] >> 8;
+		}
 		phasebuf_rpos++;
 
 		// emptied the buffer
-		if (phasebuf_rpos >= PHASE_PER_CYCLE) {
+		if (phasebuf_rpos >= dtrkCtx.msPerCycle) {
 			phasebuf_rpos = 0;
-			fillPhasebuf();
+			datatrak_gen_generate(&dtrkCtx, &dtrkBuf);
 		}
 		
 		return val;
@@ -473,13 +240,19 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 		// phase register low
 		// this causes an autoincrement
 
-		uint8_t val = phasebuf[phasebuf_rpos] >> 8; 
+		// FIXME Implement frequency switching
+		uint8_t val;
+		if (gpio7_freqsel == 1) {
+			val = dtrkBuf.f1_phase[phasebuf_rpos] >> 8;
+		} else {
+			val = dtrkBuf.f2_phase[phasebuf_rpos] >> 8;
+		}
 		phasebuf_rpos++;
 
 		// emptied the buffer
-		if (phasebuf_rpos >= PHASE_PER_CYCLE) {
+		if (phasebuf_rpos >= dtrkCtx.msPerCycle) {
 			phasebuf_rpos = 0;
-			fillPhasebuf();
+			datatrak_gen_generate(&dtrkCtx, &dtrkBuf);
 		}
 		
 		return val;
@@ -488,7 +261,11 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 		// phase register high -- this is read first
 		printf("\nPHASE_H RD8\n");
 #endif
-		return phasebuf[phasebuf_rpos] & 0xFF;
+		if (gpio7_freqsel == 1) {
+			return dtrkBuf.f1_phase[phasebuf_rpos] & 0xFF;
+		} else {
+			return dtrkBuf.f2_phase[phasebuf_rpos] & 0xFF;
+		}
 	} else if ((address >= 0x240300) && (address <= 0x2403FF)) {
 		return UartRegRead(address);
 
@@ -577,9 +354,13 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)/*{{{*/
 #ifdef LOG_SILENCE_ADC
 	} else if ((address == 0x240000) || (address == 0x240001)) {
 		// FIXME UNHANDLED 2400xx ADC
-	} else if ((address == 0x240700) || (address == 0x240701)) {
-		// FIXME UNHANDLED 2407xx ADC CHANNEL SELECT
 #endif
+	} else if ((address == 0x240700) || (address == 0x240701)) {
+		// 2407xx Output Port: ADC channel select, LF frequency select
+		gpio7_freqsel = (value & 1);
+		// Bit 1 is always set, apparently a spare bit
+		gpio7_adsel = (value >> 2) & 3;
+		//printf("GPIO7 %02X  freqsel=%d adsel=%d fselbits=%d\n", value, gpio7_freqsel, gpio7_adsel, value & 3);
 #ifdef LOG_SILENCE_240800
 	} else if ((address == 0x240800) || (address == 0x240801)) {
 		// FIXME UNHANDLED 2408xx
@@ -724,8 +505,9 @@ int main(int argc, char **argv)
 	// Init the debug UART
 	UartInit();
 
-	// Init the phase modulation engine
-	initPhasegen();
+	// Init the phase modulation engine and fill the buffer
+	datatrak_gen_init(&dtrkCtx, DATATRAK_MODE_EIGHTSLOT);
+	datatrak_gen_generate(&dtrkCtx, &dtrkBuf);
 
 	// Boot the 68000
 	//

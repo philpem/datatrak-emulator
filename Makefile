@@ -135,7 +135,7 @@ BUILD_TYPE	?=	debug
 TARGET		=	emutrak
 
 # source files that produce object files
-SRC			=	main.c uart.c
+SRC			=	main.c uart.c datatrak_gen.c
 SRC			+=	m68kcpu.c m68kdasm.c m68kops.c softfloat/softfloat.c
 
 # source type - either "c" or "cpp" (C or C++)
