@@ -10,6 +10,11 @@
 // Phase measurement maximum swing
 #define PHASE_AMPL 499
 
+// RSSI minimum
+#define RSSI_MIN 1
+// RSSI maximum
+#define RSSI_MAX 255
+
 // Trigger templates from the Datatrak firmware
 int16_t DT_TRIG50_TEMPLATE[40] = {
 	  54,    124,    181,    218,
@@ -115,7 +120,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 	for (size_t i=0; i<ctx->msPerCycle; i++) {
 		// Empty the output buffers to start with -- phase=0 and TX off
 		buf->f1_phase[i]     = buf->f2_phase[i]     = PHASE_ZERO;
-		buf->f1_amplitude[i] = buf->f2_amplitude[i] = 0;
+		buf->f1_amplitude[i] = buf->f2_amplitude[i] = RSSI_MIN;
 
 		if ( (i < 40) ||					//   0 -  40ms: Anti-aliasing 1
 			((i >= 40) && (i < 45)) ||		//  40 -  45ms: pre-trigger settling
@@ -126,7 +131,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				) {
 			// -- 85-
 			buf->f1_phase[i] = PHASE_ZERO;
-			buf->f1_amplitude[i] = 255;	// FIXME amplitude_max
+			buf->f1_amplitude[i] = RSSI_MAX;	// FIXME amplitude_max
 		} else if ((i >= 45) && (i < 85)) {		// 45-85ms: TRIGGER
 			// -- 45 - 85ms: Trigger (Gold Code) --
 			if (GOLDCODE[goldcode_word] & (1<<goldcode_bit)) {
@@ -134,7 +139,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			} else {
 				buf->f1_phase[i] = roundf(ctx->trig50_template[i-45] * 1);
 			}
-			buf->f1_amplitude[i] = 255;
+			buf->f1_amplitude[i] = RSSI_MAX;
 		} else if ((i >= 95) && (i < 115)) {
 			// -- 85 to 115ms: Clock --
 
@@ -187,13 +192,13 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			if (time_in_slot < 40) {
 				// F1+ slot, phase advance.
 				buf->f1_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
-				buf->f1_amplitude[i] = 255;
+				buf->f1_amplitude[i] = RSSI_MAX;
 			} else {
 				// F1- slot, phase delay.
 				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				while (x < 0) x += 1000;
 				buf->f1_phase[i] = x;
-				buf->f1_amplitude[i] = 255;
+				buf->f1_amplitude[i] = RSSI_MAX;
 			}
 
 		// After this, 40ms guard1 for frequency switching, then 1-8 tx on F2+/F2- for 8 slots.
@@ -219,19 +224,19 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			if (time_in_slot < 40) {
 				// F2+ slot, phase advance.
 				buf->f2_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
-				buf->f2_amplitude[i] = 255;
+				buf->f2_amplitude[i] = RSSI_MAX;
 			} else {
 				// F2- slot, phase delay.
 				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				while (x < 0) x += 1000;
 				buf->f2_phase[i] = x;
-				buf->f2_amplitude[i] = 255;
+				buf->f2_amplitude[i] = RSSI_MAX;
 			}
 
 		// After this, 20ms guard2 and we're done with the cycle
 		} else {
 			buf->f1_phase[i] = buf->f2_phase[i] = PHASE_ZERO;
-			buf->f1_amplitude[i] = buf->f2_amplitude[i] = 0;
+			buf->f1_amplitude[i] = buf->f2_amplitude[i] = RSSI_MIN;
 		}
 	}
 
@@ -291,10 +296,10 @@ void datatrak_gen_dumpModulated(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf, char
 			phi_f2 = phi_f2 + theta + ph_sh_f2;
 
 			// generate sine point
-			samp[s*2 + 0] = roundf((32767.0 * (buf->f1_amplitude[s] / 255.0)) * sin(phi_f1));
-			samp[s*2 + 1] = roundf((32767.0 * (buf->f2_amplitude[s] / 255.0)) * sin(phi_f2));
+			samp[s*2 + 0] = roundf((16383.0 * (buf->f1_amplitude[msec] / 255.0)) * sin(phi_f1));
+			samp[s*2 + 1] = roundf((16383.0 * (buf->f2_amplitude[msec] / 255.0)) * sin(phi_f2));
 		}
-		fwrite(samp, sizeof(int16_t), SAMPLES_PER_MS, fp);
+		fwrite(samp, sizeof(int16_t), SAMPLES_PER_MS*2, fp);
 	}
 	fclose(fp);
 }
