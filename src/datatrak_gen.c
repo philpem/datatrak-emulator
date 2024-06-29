@@ -143,8 +143,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 		} else if ((i >= 95) && (i < 115)) {
 			// -- 85 to 115ms: Clock --
 
-			// Clock modulation amplitude relative to trigger template
-			const float CLOCK_AMPL = 0.5;
+			const float CLOCK_AMPL = 1.0;
 
 			// Clock is sent 2 bits at a time, LSB to MSB
 			int bit_n = (ctx->goldcode_n % 8) * 2;
