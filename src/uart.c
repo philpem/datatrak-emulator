@@ -163,6 +163,7 @@ const char *GetUartRegFromAddr(const uint32_t addr, const bool reading)
 
 void UartRegWrite(uint32_t address, uint8_t value)
 {
+#ifdef UART_DEBUG_MSGS
 	// enable/disable states
 	const char *ENDIS[4] = { "unch", "ENA ", "DIS ", "??? " };
 	// command codes
@@ -185,7 +186,6 @@ void UartRegWrite(uint32_t address, uint8_t value)
 		"rsvd 15"
 	};
 
-#ifdef UART_DEBUG_MSGS
 	fprintf(stderr, "[UART WR-8] <%s> 0x%08x => 0x%02x, pc=%08X\n",
 			GetUartRegFromAddr(address, false),
 			address, value, m68k_get_reg(NULL, M68K_REG_PPC));
