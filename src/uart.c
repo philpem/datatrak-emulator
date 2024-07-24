@@ -6,8 +6,8 @@
  *   need to use select() to figure out if data is available in the socket before sending RX interrupts though
  *
  * uart terminal cmds:
- *   stty -icanon && ncat -k -l 8888
- *   stty -icanon && ncat -k -l 8889
+ *   stty -icanon && ncat -k -l 10000
+ *   stty -icanon && ncat -k -l 10001
  */
 
 #include <stdbool.h>

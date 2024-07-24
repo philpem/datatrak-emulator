@@ -18,8 +18,8 @@ make
 Running: 
 
   - Open two terminals to display the output from the serial ports:
-    - `stty -icanon && ncat -k -l 8888`
-    - `stty -icanon && ncat -k -l 8889`
+    - `stty -icanon && ncat -k -l 10000`
+    - `stty -icanon && ncat -k -l 10001`
   - Start the emulator
     - `./emutrak`
 
