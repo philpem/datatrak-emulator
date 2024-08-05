@@ -98,6 +98,24 @@ void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
 }
 
 /**
+ * Wrap phase measurement into 0..999 range.
+ *
+ * This is used when a phase calculation is done, to make sure the phase
+ * measurement mirrors what the Datatrak hardware would return.
+ *
+ * It starts by dividing by 1000, and retaining the modulus and sign.
+ * If the result is negative, 1000 is added to wrap it around.
+ */
+static inline int phaseWrap(const int x)
+{
+	int xm = x % 1000;
+	if (xm < 0) {
+		xm += 1000;
+	}
+	return xm;
+}
+
+/**
  * Datatrak Gold code. Sent once per cycle in the "trigger" slot.
  * It looks like these words should be the other way around, with the null
  * byte at the end of transmission - but Mk2 expects it to be in the middle.
@@ -174,7 +192,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				case 3: pha = 10; break;
 			}
 			buf->f1_phase[i] = roundf((ctx->trig50_template[((i-95)+pha) % 20] * CLOCK_AMPL) + (PHASE_ZERO * (1.0 - CLOCK_AMPL)));
-			buf->f1_amplitude[i] = 255;
+			buf->f1_amplitude[i] = RSSI_MAX;	// TODO: trigger_rssi
 
 		// Interlacing means that while stations 1-8 are transmitting on F1, either
 		// stations 9-16 (odd cycles) or 17-24 (even cycles) will be transmitting
@@ -202,17 +220,15 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			if (time_in_slot < 40) {
 				// F1+ slot, phase advance.
 				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
-					buf->f1_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+					buf->f1_phase[i] = phaseWrap(slot_phase_ofs_plus + (time_in_slot * 40));
 				} else {
 					buf->f1_phase[i] = PHASE_ZERO;
 				}
 				buf->f1_amplitude[i] = ctx->slotPower[navslot_n];
 			} else {
 				// F1- slot, phase delay.
-				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
-				while (x < 0) x += 1000;
 				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
-					buf->f1_phase[i] = x;
+					buf->f1_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				} else {
 					buf->f1_phase[i] = PHASE_ZERO;
 				}
@@ -226,17 +242,15 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				if (time_in_slot < 40) {
 					// IL F2+ slot, phase advance.
 					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
-						buf->f2_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+						buf->f2_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
 					} else {
 						buf->f2_phase[i] = PHASE_ZERO;
 					}
 					buf->f2_amplitude[i] = ctx->slotPower[ilslot_n];
 				} else {
 					// IL F2- slot, phase delay.
-					int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
-					while (x < 0) x += 1000;
 					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
-						buf->f2_phase[i] = x;
+						buf->f2_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 					} else {
 						buf->f2_phase[i] = PHASE_ZERO;
 					}
@@ -267,17 +281,15 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			if (time_in_slot < 40) {
 				// F2+ slot, phase advance.
 				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
-					buf->f2_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+					buf->f2_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
 				} else {
 					buf->f2_phase[i] = PHASE_ZERO;
 				}
 				buf->f2_amplitude[i] = ctx->slotPower[navslot_n];
 			} else {
 				// F2- slot, phase delay.
-				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
-				while (x < 0) x += 1000;
 				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
-					buf->f2_phase[i] = x;
+					buf->f2_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				} else {
 					buf->f2_phase[i] = PHASE_ZERO;
 				}
@@ -291,17 +303,15 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				if (time_in_slot < 40) {
 					// IL F1+ slot, phase advance.
 					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
-						buf->f1_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+						buf->f1_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
 					} else {
 						buf->f1_phase[i] = PHASE_ZERO;
 					}
 					buf->f1_amplitude[i] = ctx->slotPower[ilslot_n];
 				} else {
 					// IL F1- slot, phase delay.
-					int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
-					while (x < 0) x += 1000;
 					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
-						buf->f1_phase[i] = x;
+						buf->f1_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 					} else {
 						buf->f1_phase[i] = PHASE_ZERO;
 					}
