@@ -30,8 +30,6 @@
 #define LOG_SILENCE_240800
 #define LOG_SILENCE_ADC
 
-// Generate trigger from scratch
-#define GENERATE_TRIGGER
 // Debug: write modulated (audible) phase data to a file. Data format is 16bit signed, mono, 44100 Hz.
 //#define WRITE_PHASEDATA_MODULATED
 // Debug: write raw phase data to a file. Data format is 16bit signed, mono, 44100 Hz.
@@ -66,6 +64,17 @@ size_t phasebuf_rpos = 0;
 uint8_t gpio7_freqsel = 0;
 // Current A/D converter selection (0=RSSI, 1=UHF P14, 2=5V divided by 2.5, 3=12V divided by 5.556)
 uint8_t gpio7_adsel = 0;
+
+static inline void fillLFBuffer(void)
+{
+	datatrak_gen_generate(&dtrkCtx, &dtrkBuf);
+#ifdef WRITE_PHASEDATA_MODULATED
+	datatrak_gen_dumpModulated(&dtrkCtx, &dtrkBuf, "phasedata_modulated.raw");
+#endif
+#ifdef WRITE_PHASEDATA
+	datatrak_gen_dumpRaw(&dtrkCtx, &dtrkBuf, "phasedata_raw.raw");
+#endif
+}
 
 const char *GetDevFromAddr(const uint32_t address)
 {
@@ -202,7 +211,7 @@ uint32_t m68k_read_memory_16(uint32_t address)/*{{{*/
 		// emptied the buffer
 		if (phasebuf_rpos >= dtrkCtx.msPerCycle) {
 			phasebuf_rpos = 0;
-			datatrak_gen_generate(&dtrkCtx, &dtrkBuf);
+			fillLFBuffer();
 		}
 		
 		return val;
@@ -252,7 +261,7 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 		// emptied the buffer
 		if (phasebuf_rpos >= dtrkCtx.msPerCycle) {
 			phasebuf_rpos = 0;
-			datatrak_gen_generate(&dtrkCtx, &dtrkBuf);
+			fillLFBuffer();
 		}
 		
 		return val;
@@ -270,10 +279,20 @@ uint32_t m68k_read_memory_8(uint32_t address)/*{{{*/
 		return UartRegRead(address);
 
 		// 240401 -- Alarm port
-#ifdef LOG_SILENCE_ADC
 	} else if ((address == 0x240000) || (address == 0x240001)) {
 		// FIXME UNHANDLED 2400xx ADC
-		return UNIMPLEMENTED_VALUE & 0xFF;
+		if (gpio7_adsel == 0) {
+			// RSSI
+			if (gpio7_freqsel == 1) {
+				return dtrkBuf.f1_amplitude[phasebuf_rpos];
+			} else {
+				return dtrkBuf.f2_amplitude[phasebuf_rpos];
+			}
+		} else {
+			// FIXME Provide readings for 5V, 12V and the UHF board indication voltage
+			return UNIMPLEMENTED_VALUE & 0xFF;
+		}
+#ifdef LOG_SILENCE_ADC
 	} else if ((address == 0x240700) || (address == 0x240701)) {
 		// FIXME UNHANDLED 2407xx ADC CHANNEL SELECT
 		return UNIMPLEMENTED_VALUE & 0xFF;
@@ -507,7 +526,7 @@ int main(int argc, char **argv)
 
 	// Init the phase modulation engine and fill the buffer
 	datatrak_gen_init(&dtrkCtx, DATATRAK_MODE_EIGHTSLOT);
-	datatrak_gen_generate(&dtrkCtx, &dtrkBuf);
+	fillLFBuffer();
 
 	// Boot the 68000
 	//
