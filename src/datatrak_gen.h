@@ -31,6 +31,7 @@ typedef struct {
 	uint16_t trig375_template[40];				///< Trigger 37.5Hz signal template
 	int goldcode_n;								///< Current Goldcode offset (0-63)
 	int clock_n;								///< Current Clock value (0-65535)
+	DATATRAK_MODE mode;							///< Eight-slot or interlaced mode select
 } DATATRAK_LF_CTX;
 
 typedef struct {

@@ -50,10 +50,17 @@ void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
 			ctx->numNavslotsTotal = 8;
 			break;
 
+		case DATATRAK_MODE_INTERLACED:
+			ctx->numNavslotsPerCycle = 8;
+			ctx->numNavslotsTotal = 24;
+			break;
+
 		default:
 			assert(1==0);
 			break;
 	}
+
+	ctx->mode = mode;
 
 	// Calculate number of milliseconds per cycle for this Datatrak mode
 	ctx->msPerCycle = (340 + (ctx->numNavslotsPerCycle * 80) + 40 + (ctx->numNavslotsPerCycle * 80) + 20);
@@ -61,6 +68,10 @@ void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
 	// Set initial conditions
 	ctx->goldcode_n = 0;
 	ctx->clock_n = 12345;
+	for (size_t i=0; i<ctx->numNavslotsTotal; i++) {
+		ctx->slotPhaseOffset[i] = 0;
+		ctx->slotPower[i] = RSSI_MIN;
+	}
 
 	// Generate trigger templates
 #if 0
@@ -173,7 +184,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 		//
 
 		} else if ((i >= 340) && (i < 340 + (ctx->numNavslotsPerCycle * 80))) {
-			// Navslots (F1)
+			// Navslots (F1 and Interlaced F2)
 
 			// Navslot number (0 to 7 = slot 1 to 8)
 			int navslot_n = (i - 340) / 80;
@@ -190,21 +201,54 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 			if (time_in_slot < 40) {
 				// F1+ slot, phase advance.
-				buf->f1_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
-				buf->f1_amplitude[i] = RSSI_MAX;
+				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+					buf->f1_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+				} else {
+					buf->f1_phase[i] = PHASE_ZERO;
+				}
+				buf->f1_amplitude[i] = ctx->slotPower[navslot_n];
 			} else {
 				// F1- slot, phase delay.
 				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				while (x < 0) x += 1000;
-				buf->f1_phase[i] = x;
-				buf->f1_amplitude[i] = RSSI_MAX;
+				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+					buf->f1_phase[i] = x;
+				} else {
+					buf->f1_phase[i] = PHASE_ZERO;
+				}
+				buf->f1_amplitude[i] = ctx->slotPower[navslot_n];
+			}
+
+			// Interlaced mode? If so, generate F2 interlaced slots.
+			if (ctx->mode == DATATRAK_MODE_INTERLACED) {
+				int ilslot_n = navslot_n + (ctx->goldcode_n & 1 ? 16 : 8);
+
+				if (time_in_slot < 40) {
+					// IL F2+ slot, phase advance.
+					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+						buf->f2_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+					} else {
+						buf->f2_phase[i] = PHASE_ZERO;
+					}
+					buf->f2_amplitude[i] = ctx->slotPower[ilslot_n];
+				} else {
+					// IL F2- slot, phase delay.
+					int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+					while (x < 0) x += 1000;
+					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+						buf->f2_phase[i] = x;
+					} else {
+						buf->f2_phase[i] = PHASE_ZERO;
+					}
+					buf->f2_amplitude[i] = ctx->slotPower[ilslot_n];
+				}
 			}
 
 		// After this, 40ms guard1 for frequency switching, then 1-8 tx on F2+/F2- for 8 slots.
 		} else if ((i >= (340 /* preamble */ + (ctx->numNavslotsPerCycle * 80) /* F1 slots */ + 40 /* G1 */)) &&
 				   (i <  (340 /* preamble */ + (ctx->numNavslotsPerCycle * 80) /* F1 slots */ + 40 /* G1 */ + (ctx->numNavslotsPerCycle * 80))))
 		{
-			// Navslots (F2)
+			// Navslots (F2 and Interlaced F1)
 
 			// Navslot number (0 to 7 = slot 1 to 8)
 			int navslot_n = (i - 340 - (ctx->numNavslotsPerCycle * 80) - 40) / 80;
@@ -222,14 +266,47 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 			if (time_in_slot < 40) {
 				// F2+ slot, phase advance.
-				buf->f2_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
-				buf->f2_amplitude[i] = RSSI_MAX;
+				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+					buf->f2_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+				} else {
+					buf->f2_phase[i] = PHASE_ZERO;
+				}
+				buf->f2_amplitude[i] = ctx->slotPower[navslot_n];
 			} else {
 				// F2- slot, phase delay.
 				int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				while (x < 0) x += 1000;
-				buf->f2_phase[i] = x;
-				buf->f2_amplitude[i] = RSSI_MAX;
+				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+					buf->f2_phase[i] = x;
+				} else {
+					buf->f2_phase[i] = PHASE_ZERO;
+				}
+				buf->f2_amplitude[i] = ctx->slotPower[navslot_n];
+			}
+
+			// Interlaced mode? If so, generate F1 interlaced slots.
+			if (ctx->mode == DATATRAK_MODE_INTERLACED) {
+				int ilslot_n = navslot_n + (ctx->goldcode_n & 1 ? 16 : 8);
+
+				if (time_in_slot < 40) {
+					// IL F1+ slot, phase advance.
+					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+						buf->f1_phase[i] = (slot_phase_ofs_plus  + (time_in_slot * 40)) % 1000;
+					} else {
+						buf->f1_phase[i] = PHASE_ZERO;
+					}
+					buf->f1_amplitude[i] = ctx->slotPower[ilslot_n];
+				} else {
+					// IL F1- slot, phase delay.
+					int x = (slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+					while (x < 0) x += 1000;
+					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+						buf->f1_phase[i] = x;
+					} else {
+						buf->f1_phase[i] = PHASE_ZERO;
+					}
+					buf->f1_amplitude[i] = ctx->slotPower[ilslot_n];
+				}
 			}
 
 		// After this, 20ms guard2 and we're done with the cycle

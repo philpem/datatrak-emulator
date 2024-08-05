@@ -524,8 +524,22 @@ int main(int argc, char **argv)
 	// Init the debug UART
 	UartInit();
 
-	// Init the phase modulation engine and fill the buffer
-	datatrak_gen_init(&dtrkCtx, DATATRAK_MODE_EIGHTSLOT);
+	// Init the phase modulation engine
+	datatrak_gen_init(&dtrkCtx, DATATRAK_MODE_INTERLACED);
+	// Enable slots
+	//
+	// Combinations:
+	//   * 0,4,5,9,11 (=51, 61, 1210) => Causes repeated "Auto Pat Restart" and "superfix() terminated"
+	//
+	dtrkCtx.slotPower[0] = 255;
+	dtrkCtx.slotPower[1] = 255;
+	dtrkCtx.slotPower[2] = 255;
+	dtrkCtx.slotPower[3] = 255;
+	dtrkCtx.slotPower[4] = 255;
+	dtrkCtx.slotPower[5] = 255;
+	dtrkCtx.slotPower[6] = 255;
+
+	// Fill the LF buffer
 	fillLFBuffer();
 
 	// Boot the 68000
