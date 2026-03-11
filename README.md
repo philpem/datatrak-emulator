@@ -15,13 +15,15 @@ cd datatrak
 make
 ```
 
-Running: 
+Running:
 
-  - Open two terminals to display the output from the serial ports:
-    - `stty -icanon && ncat -k -l 10000`
-    - `stty -icanon && ncat -k -l 10001`
-  - Start the emulator
+  - Start the emulator first — it will listen for connections on ports 10000 and 10001:
     - `./emutrak`
+  - Connect to the serial ports in separate terminals:
+    - `nc localhost 10000`  (UART A — emulator waits for this before booting the CPU)
+    - `nc localhost 10001`  (UART B — optional)
+
+Both `nc` (netcat) and `telnet` work.
 
 ## Contributing
 

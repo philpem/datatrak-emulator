@@ -1,13 +1,9 @@
 /***
  * UART Emulation
  *
- * TODO's for the UART - when irq mask (IMR) gets TxRdy bit set, make sure to pend an IRQ indicating TX is ready.
- *   uart driver should "pretend" data is sent instantly, UART is always ready
- *   need to use select() to figure out if data is available in the socket before sending RX interrupts though
- *
- * uart terminal cmds:
- *   stty -icanon && ncat -k -l 10000
- *   stty -icanon && ncat -k -l 10001
+ * SCC68692 dual UART emulation. Each channel listens on a TCP port;
+ * connect with 'nc localhost 10000' or 'telnet localhost 10000'.
+ * Telnet IAC negotiation bytes are stripped automatically.
  */
 
 #include <stdbool.h>
@@ -16,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -30,8 +28,9 @@
 #include "uart.h"
 
 
-// TCP port for the UART comm port
-#define UART_PORT 10000
+// TCP ports for the two UART channels
+#define UART_PORT_A 10000
+#define UART_PORT_B 10001
 
 // Define to enable register r/w debug messages
 // #define UART_DEBUG_MSGS
@@ -44,91 +43,209 @@
 uart_s Uart;
 
 
-void die(char *s)
+static void die(char *s)
 {
     perror(s);
     exit(1);
 }
 
+// Close a client socket and reset to -1
+static void UartClientClose(int *sockfd)
+{
+	if (*sockfd >= 0) {
+		close(*sockfd);
+		*sockfd = -1;
+	}
+}
+
+// Create a non-blocking TCP listening socket bound to the given port.
+static int make_listen_socket(int port)
+{
+	int fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (fd < 0) die("socket");
+
+	int one = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
+		die("setsockopt SO_REUSEADDR");
+
+	if (fcntl(fd, F_SETFL, O_NONBLOCK) < 0)
+		die("fcntl O_NONBLOCK");
+
+	struct sockaddr_in sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_family      = AF_INET;
+	sa.sin_addr.s_addr = INADDR_ANY;
+	sa.sin_port        = htons(port);
+
+	if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		die("bind");
+
+	if (listen(fd, 1) < 0)
+		die("listen");
+
+	return fd;
+}
+
 
 int UartInit(void)
 {
-	struct sockaddr_in si_Uart;
-
-	// initialise UART registers
 	memset(&Uart, '\0', sizeof(Uart));
+
 	Uart.TxEnA = Uart.TxEnB = false;
 	Uart.RxEnA = Uart.RxEnB = false;
 	Uart.MRnA  = Uart.MRnB  = false;
 
-	// Default interrupt vector is 0x0F on reset
+	// Default interrupt vector on reset
 	Uart.IVR = 0x0F;
 
-	// Create a TCP socket
-	if ((Uart.SocketA = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-	{
-		die("Failed to create socket for UARTA");
-	}
-	if ((Uart.SocketB = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-	{
-		die("Failed to create socket for UARTB");
-	}
+	// No clients connected yet
+	Uart.SocketA = Uart.SocketB = -1;
+	Uart.RxReadyA = Uart.RxReadyB = false;
+	Uart.IacStateA = Uart.IacStateB = IAC_NORMAL;
 
-	// Construct the server's sockaddr_in structure -- this is for UART_A
-	// The UART A Interface connects to port UART_PORT
-	memset(&si_Uart, 0, sizeof(si_Uart));
-	si_Uart.sin_family		= AF_INET;
-	si_Uart.sin_addr.s_addr	= inet_addr("127.0.0.1");
-	si_Uart.sin_port		= htons(UART_PORT);
+	// Create listening sockets
+	Uart.ListenA = make_listen_socket(UART_PORT_A);
+	fprintf(stderr, "UART_A listening on port %d\n", UART_PORT_A);
 
-	// Establish connection
-	if (connect(Uart.SocketA, (struct sockaddr *)&si_Uart, sizeof(si_Uart)) < 0) {
-		fprintf(stderr, "Failed to connect to UART_A terminal (port %d)\n", UART_PORT);
-		close(Uart.SocketA);
-		Uart.SocketA = -1;
-	}
-
-	// Construct the server's sockaddr_in structure -- this is for UART_A
-	// The UART A Interface connects to port UART_PORT
-	memset(&si_Uart, 0, sizeof(si_Uart));
-	si_Uart.sin_family		= AF_INET;
-	si_Uart.sin_addr.s_addr	= inet_addr("127.0.0.1");
-	si_Uart.sin_port		= htons(UART_PORT + 1);
-
-	// Establish connection
-	if (connect(Uart.SocketB, (struct sockaddr *)&si_Uart, sizeof(si_Uart)) < 0) {
-		fprintf(stderr, "Failed to connect to UART_B terminal (port %d)\n", UART_PORT+1);
-		close(Uart.SocketB);
-		Uart.SocketB = -1;
-	}
-
-	// TODO set nonblocking
+	Uart.ListenB = make_listen_socket(UART_PORT_B);
+	fprintf(stderr, "UART_B listening on port %d\n", UART_PORT_B);
 
 	return 0;
 }
 
+
 void UartDone(void)
 {
-	if (Uart.SocketA > 0) {
-		close(Uart.SocketA);
-	}
-
-	if (Uart.SocketB > 0) {
-		close(Uart.SocketB);
-	}
+	UartClientClose(&Uart.SocketA);
+	UartClientClose(&Uart.SocketB);
+	if (Uart.ListenA >= 0) close(Uart.ListenA);
+	if (Uart.ListenB >= 0) close(Uart.ListenB);
 }
 
-uint8_t UartRx(void)
+
+// Filter one incoming byte through the telnet IAC state machine.
+// Returns true and writes *out if the byte should be passed to the firmware.
+// Returns false if the byte is part of an IAC sequence (discard it).
+// Also sends WONT/DONT responses when the telnet client offers options.
+static bool UartFilterByte(int sockfd, uint8_t byte, IacState *state,
+                            uint8_t *pending_cmd, uint8_t *out)
 {
-	uint8_t buf;
+	switch (*state) {
+		case IAC_NORMAL:
+			if (byte == 0xFF) {
+				*state = IAC_AFTER_FF;
+				return false;
+			}
+			*out = byte;
+			return true;
 
-	// TODO select()
+		case IAC_AFTER_FF:
+			if (byte == 0xFF) {
+				// Escaped literal 0xFF
+				*state = IAC_NORMAL;
+				*out = 0xFF;
+				return true;
+			}
+			if (byte == 0xFB || byte == 0xFD) {
+				// WILL or DO — we will respond WONT/DONT after seeing the option
+				*pending_cmd = byte;
+				*state = IAC_AFTER_CMD;
+				return false;
+			}
+			if (byte == 0xFC || byte == 0xFE) {
+				// WONT or DONT — no response needed, just eat the option byte
+				*pending_cmd = 0;
+				*state = IAC_AFTER_CMD;
+				return false;
+			}
+			// SE, NOP, or other single-byte commands
+			*state = IAC_NORMAL;
+			return false;
 
-	if (recv(Uart.SocketA, &buf, 1, 0) < 1) {
-		die("Failed to receive byte from TTY");
+		case IAC_AFTER_CMD:
+			// This byte is the option code
+			if (*pending_cmd == 0xFB) {
+				// Client sent WILL <opt> — respond IAC DONT <opt>
+				uint8_t resp[3] = { 0xFF, 0xFE, byte };
+				send(sockfd, resp, 3, MSG_NOSIGNAL);
+			} else if (*pending_cmd == 0xFD) {
+				// Client sent DO <opt> — respond IAC WONT <opt>
+				uint8_t resp[3] = { 0xFF, 0xFC, byte };
+				send(sockfd, resp, 3, MSG_NOSIGNAL);
+			}
+			*state = IAC_NORMAL;
+			return false;
 	}
 
-	return buf;
+	// unreachable
+	return false;
+}
+
+
+// Try to accept a new client on the given listening socket.
+// Sets *client_sock, *iac_state on success.
+static void try_accept(int listen_sock, int *client_sock,
+                        IacState *iac_state, const char *name)
+{
+	if (*client_sock >= 0) return;  // already connected
+
+	int fd = accept(listen_sock, NULL, NULL);
+	if (fd < 0) return;  // EAGAIN/EWOULDBLOCK — no pending connection
+
+	if (fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
+		close(fd);
+		return;
+	}
+
+	*client_sock = fd;
+	*iac_state   = IAC_NORMAL;
+	fprintf(stderr, "%s: client connected\n", name);
+}
+
+
+void UartPollRx(void)
+{
+	// --- Channel A ---
+	try_accept(Uart.ListenA, &Uart.SocketA, &Uart.IacStateA, "UART_A");
+
+	if (Uart.SocketA >= 0 && Uart.RxEnA && !Uart.RxReadyA) {
+		uint8_t raw;
+		int n = recv(Uart.SocketA, &raw, 1, 0);
+		if (n == 1) {
+			uint8_t filtered;
+			if (UartFilterByte(Uart.SocketA, raw, &Uart.IacStateA,
+			                   &Uart.IacPendingCmdA, &filtered)) {
+				Uart.RxBufA   = filtered;
+				Uart.RxReadyA = true;
+				if (Uart.IMR & 0x02)   // RxRdy/FFullA
+					InterruptFlags.uart = true;
+			}
+		} else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+			UartClientClose(&Uart.SocketA);
+			fprintf(stderr, "UART_A: client disconnected\n");
+		}
+	}
+
+	// --- Channel B ---
+	try_accept(Uart.ListenB, &Uart.SocketB, &Uart.IacStateB, "UART_B");
+
+	if (Uart.SocketB >= 0 && Uart.RxEnB && !Uart.RxReadyB) {
+		uint8_t raw;
+		int n = recv(Uart.SocketB, &raw, 1, 0);
+		if (n == 1) {
+			uint8_t filtered;
+			if (UartFilterByte(Uart.SocketB, raw, &Uart.IacStateB,
+			                   &Uart.IacPendingCmdB, &filtered)) {
+				Uart.RxBufB   = filtered;
+				Uart.RxReadyB = true;
+				if (Uart.IMR & 0x20)   // RxRdy/FFullB
+					InterruptFlags.uart = true;
+			}
+		} else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+			UartClientClose(&Uart.SocketB);
+			fprintf(stderr, "UART_B: client disconnected\n");
+		}
+	}
 }
 
 
@@ -254,17 +371,15 @@ void UartRegWrite(uint32_t address, uint8_t value)
 #ifdef UART_DEBUG_MSGS
 			printf("UARTA --> %c  [%02x]\n", value, value);
 #endif
-			if (Uart.SocketA > 0) {
-				if (send(Uart.SocketA, &value, 1, 0) != 1) {
-					die("Mismatch in number of sent bytes (UARTA)");
-				}
+			if (Uart.SocketA >= 0) {
+				if (send(Uart.SocketA, &value, 1, MSG_NOSIGNAL) != 1)
+					UartClientClose(&Uart.SocketA);
 			}
 
 			// If IMR transmit interrupt is enabled, pend a TX IRQ
 			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10)) {
 				InterruptFlags.uart = true;
 			}
-
 			break;
 
 
@@ -284,7 +399,7 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			fprintf(stderr, "\n");
 #endif
 
-			// If TX interrupt is enabled, pend one (transmit buffer clear)
+			// If TX interrupt is enabled, pend one (transmit buffer always clear)
 			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10)) {
 				InterruptFlags.uart = true;
 			}
@@ -353,10 +468,14 @@ void UartRegWrite(uint32_t address, uint8_t value)
 #ifdef UART_DEBUG_MSGS
 			printf("UARTB --> %c  [%02x]\n", value, value);
 #endif
-			if (Uart.SocketB > 0) {
-				if (send(Uart.SocketB, &value, 1, 0) != 1) {
-					die("Mismatch in number of sent bytes (UARTB)");
-				}
+			if (Uart.SocketB >= 0) {
+				if (send(Uart.SocketB, &value, 1, MSG_NOSIGNAL) != 1)
+					UartClientClose(&Uart.SocketB);
+			}
+
+			// If IMR transmit interrupt B is enabled, pend a TX IRQ
+			if (Uart.IMR & 0x10) {
+				InterruptFlags.uart = true;
 			}
 			break;
 
@@ -390,13 +509,28 @@ uint8_t UartRegRead(uint32_t address)
 	uint8_t val;
 
 	switch ((address >> 1) & 0x0F) {
-		case 1:		// Status Register A
-		case 9:		// Status Register B
-			val = 0x0C;		// TxRDY on, TxEMT on, RxRDY off
+		case 1:		// Status Register A: bit0=RxRDY, bit2=TxEMT, bit3=TxRDY
+			val = 0x0C | (Uart.RxReadyA ? 0x01 : 0);
 			break;
 
-		case 5:		// Interrupt status register
-			val = 0x11;	// Channel A TXRDY, Channel B TXRDY
+		case 3:		// Receive Holding Register A
+			val = Uart.RxBufA;
+			Uart.RxReadyA = false;
+			break;
+
+		case 5:		// Interrupt Status Register
+			val = 0x11;                         // TxRdyA(bit0) | TxRdyB(bit4) always set
+			if (Uart.RxReadyA) val |= 0x02;     // RxRdy/FFullA = bit1
+			if (Uart.RxReadyB) val |= 0x20;     // RxRdy/FFullB = bit5
+			break;
+
+		case 9:		// Status Register B
+			val = 0x0C | (Uart.RxReadyB ? 0x01 : 0);
+			break;
+
+		case 11:	// Receive Holding Register B
+			val = Uart.RxBufB;
+			Uart.RxReadyB = false;
 			break;
 
 		default:
