@@ -9,6 +9,12 @@
 
 #define DATATRAK_BUF_LEN 1680
 
+// RSSI minimum
+#define DATATRAK_RSSI_MIN 1
+// RSSI maximum
+#define DATATRAK_RSSI_MAX 255
+
+
 typedef enum {
 	DATATRAK_MODE_EIGHTSLOT,		///< F1 chain only, 8 slots, no interlacing.
 	DATATRAK_MODE_INTERLACED		///< F1 and F2 chain, 24 slots, interlaced.
@@ -17,7 +23,7 @@ typedef enum {
 typedef struct {
 	// -- User configurable parameters (at any time) --
 	uint8_t rfNoiseLevel;						///< RF noise level (returned for unmodulated slots)
-	uint16_t slotPhaseOffset[24];				///< Slot phase offsets
+	int16_t slotPhaseOffset[24];				///< Slot phase offsets
 	uint8_t slotPower[24];						///< Slot transmit power
 	uint8_t trig1Power, trig2Power;				///< F1/F2 trigger transmit power
 

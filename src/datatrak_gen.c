@@ -10,12 +10,11 @@
 // Phase measurement maximum swing
 #define PHASE_AMPL 499
 
-// RSSI minimum
-#define RSSI_MIN 1
-// RSSI maximum
-#define RSSI_MAX 255
-
 // Trigger templates from the Datatrak firmware
+
+/**
+ * 50Hz Trigger/Clock template
+ */
 int16_t DT_TRIG50_TEMPLATE[40] = {
 	  54,    124,    181,    218,
 	 232,    221,    185,    129,
@@ -28,6 +27,10 @@ int16_t DT_TRIG50_TEMPLATE[40] = {
 	-216,   -251,   -261,   -245,
 	-207,   -148,    -74,      8
 };
+
+/**
+ * 37.5Hz Trigger/Clock template
+ */
 int16_t DT_TRIG375_TEMPLATE[40] = {
 	 -43,    -98,   -144,   -181,
 	-203,   -212,   -204,   -183,
@@ -40,6 +43,15 @@ int16_t DT_TRIG375_TEMPLATE[40] = {
 	-254,   -236,   -204,   -162,
 	-110,    -53,      9,     69
 };
+
+/**
+ * Datatrak Gold code. Sent once per cycle in the "trigger" slot.
+ * It looks like these words should be the other way around, with the null
+ * byte at the end of transmission - but Mk2 expects it to be in the middle.
+ * I guess it might be a bug but who knows?
+ */
+const uint32_t GOLDCODE[] = {0xFA9B8700, 0xAE32BD97};
+
 
 void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
 {
@@ -70,7 +82,7 @@ void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
 	ctx->clock_n = 12345;
 	for (size_t i=0; i<ctx->numNavslotsTotal; i++) {
 		ctx->slotPhaseOffset[i] = 0;
-		ctx->slotPower[i] = RSSI_MIN;
+		ctx->slotPower[i] = DATATRAK_RSSI_MIN;
 	}
 
 	// Generate trigger templates
@@ -86,9 +98,23 @@ void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
 	}
 #else
 //# warning "Generating Trigger from rescaled firmware values"
-	const double scale = 1.73;	// 1.73 gives the best trigger match quality (705)
+	const double scale = 1.73;	// 1.73 gives the best balance of FTS and tracking trigger quality.
 								// 500 peak = 289 after scaling, what's going on?
-	
+	// TODO: Look into the processing FTS and Tracking do and how they differ.
+// value   FTS qual   post-lock qual       time to get FTS lock
+// -----   --------   --------------       --------------------
+// 1.60 =  966 FTS -- 912 post lock     -- instant (GC=7)
+// 1.70 =  733 FTS -- 792 post lock     -- instant (GC=7)
+// 1.73 =  717 FTS -- 757-758 post lock -- instant FTS lock (GC=7)
+// 1.75 =  738 FTS -- 740 post lock     -- instant
+// 1.80 =  814 FTS -- 701 post lock     -- instant
+// 1.85 =  924 FTS -- 666 post lock     -- instant
+// 1.90 =  900 FTS -- 658 post lock (takes a few tries to FTS)
+// 1.94 =  955 FTS -- 649 post lock
+// 1.95 =      FTS -- 646 post lock
+// 1.97 =  989 FTS -- 647 post lock
+// 1.98 = 647 post lock
+// 1.99+ = No Trigger
 	for (int i=0; i < 40; i++) {
 		// Re-scale the firmware templates - convert from signed-around-zero to unsigned 0-1000
 		ctx->trig50_template[i]  = trunc((double)(DT_TRIG50_TEMPLATE[i])  * scale + PHASE_ZERO);
@@ -114,14 +140,6 @@ static inline int phaseWrap(const int x)
 	}
 	return xm;
 }
-
-/**
- * Datatrak Gold code. Sent once per cycle in the "trigger" slot.
- * It looks like these words should be the other way around, with the null
- * byte at the end of transmission - but Mk2 expects it to be in the middle.
- * I guess it might be a bug but who knows?
- */
-const uint32_t GOLDCODE[] = {0xFA9B8700, 0xAE32BD97};
 
 void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 {
@@ -149,7 +167,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 	for (size_t i=0; i<ctx->msPerCycle; i++) {
 		// Empty the output buffers to start with -- phase=0 and TX off
 		buf->f1_phase[i]     = buf->f2_phase[i]     = PHASE_ZERO;
-		buf->f1_amplitude[i] = buf->f2_amplitude[i] = RSSI_MIN;
+		buf->f1_amplitude[i] = buf->f2_amplitude[i] = DATATRAK_RSSI_MIN;
 
 		if ( (i < 40) ||					//   0 -  40ms: Anti-aliasing 1
 			((i >= 40) && (i < 45)) ||		//  40 -  45ms: pre-trigger settling
@@ -160,7 +178,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				) {
 			// -- 85-
 			buf->f1_phase[i] = PHASE_ZERO;
-			buf->f1_amplitude[i] = RSSI_MAX;	// FIXME amplitude_max
+			buf->f1_amplitude[i] = DATATRAK_RSSI_MAX;	// FIXME amplitude_max
 		} else if ((i >= 45) && (i < 85)) {		// 45-85ms: TRIGGER
 			// -- 45 - 85ms: Trigger (Gold Code) --
 			if (GOLDCODE[goldcode_word] & (1<<goldcode_bit)) {
@@ -168,7 +186,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			} else {
 				buf->f1_phase[i] = roundf(ctx->trig50_template[i-45] * 1);
 			}
-			buf->f1_amplitude[i] = RSSI_MAX;
+			buf->f1_amplitude[i] = DATATRAK_RSSI_MAX;
 		} else if ((i >= 95) && (i < 115)) {
 			// -- 85 to 115ms: Clock --
 
@@ -192,7 +210,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				case 3: pha = 10; break;
 			}
 			buf->f1_phase[i] = roundf((ctx->trig50_template[((i-95)+pha) % 20] * CLOCK_AMPL) + (PHASE_ZERO * (1.0 - CLOCK_AMPL)));
-			buf->f1_amplitude[i] = RSSI_MAX;	// TODO: trigger_rssi
+			buf->f1_amplitude[i] = DATATRAK_RSSI_MAX;	// TODO: trigger_rssi
 
 		// Interlacing means that while stations 1-8 are transmitting on F1, either
 		// stations 9-16 (odd cycles) or 17-24 (even cycles) will be transmitting
@@ -219,7 +237,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 			if (time_in_slot < 40) {
 				// F1+ slot, phase advance.
-				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
 					buf->f1_phase[i] = phaseWrap(slot_phase_ofs_plus + (time_in_slot * 40));
 				} else {
 					buf->f1_phase[i] = PHASE_ZERO;
@@ -227,7 +245,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				buf->f1_amplitude[i] = ctx->slotPower[navslot_n];
 			} else {
 				// F1- slot, phase delay.
-				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
 					buf->f1_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				} else {
 					buf->f1_phase[i] = PHASE_ZERO;
@@ -241,7 +259,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 				if (time_in_slot < 40) {
 					// IL F2+ slot, phase advance.
-					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
 						buf->f2_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
 					} else {
 						buf->f2_phase[i] = PHASE_ZERO;
@@ -249,7 +267,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 					buf->f2_amplitude[i] = ctx->slotPower[ilslot_n];
 				} else {
 					// IL F2- slot, phase delay.
-					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
 						buf->f2_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 					} else {
 						buf->f2_phase[i] = PHASE_ZERO;
@@ -280,7 +298,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 			if (time_in_slot < 40) {
 				// F2+ slot, phase advance.
-				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
 					buf->f2_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
 				} else {
 					buf->f2_phase[i] = PHASE_ZERO;
@@ -288,7 +306,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				buf->f2_amplitude[i] = ctx->slotPower[navslot_n];
 			} else {
 				// F2- slot, phase delay.
-				if (ctx->slotPower[navslot_n] > RSSI_MIN) {
+				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
 					buf->f2_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 				} else {
 					buf->f2_phase[i] = PHASE_ZERO;
@@ -302,7 +320,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 				if (time_in_slot < 40) {
 					// IL F1+ slot, phase advance.
-					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
 						buf->f1_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
 					} else {
 						buf->f1_phase[i] = PHASE_ZERO;
@@ -310,7 +328,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 					buf->f1_amplitude[i] = ctx->slotPower[ilslot_n];
 				} else {
 					// IL F1- slot, phase delay.
-					if (ctx->slotPower[ilslot_n] > RSSI_MIN) {
+					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
 						buf->f1_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
 					} else {
 						buf->f1_phase[i] = PHASE_ZERO;
@@ -322,7 +340,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 		// After this, 20ms guard2 and we're done with the cycle
 		} else {
 			buf->f1_phase[i] = buf->f2_phase[i] = PHASE_ZERO;
-			buf->f1_amplitude[i] = buf->f2_amplitude[i] = RSSI_MIN;
+			buf->f1_amplitude[i] = buf->f2_amplitude[i] = DATATRAK_RSSI_MIN;
 		}
 	}
 
