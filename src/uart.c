@@ -192,10 +192,10 @@ static void try_accept(int listen_sock, int *client_sock,
 	int fd = accept(listen_sock, NULL, NULL);
 	if (fd < 0) return;  // EAGAIN/EWOULDBLOCK — no pending connection
 
-	if (fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
-		close(fd);
-		return;
-	}
+	// Do NOT set O_NONBLOCK on the accepted socket — send() must remain
+	// blocking so TX never sees EAGAIN and inadvertently closes the connection
+	// when the firmware bursts output and fills the TCP send buffer.
+	// recv() is kept non-blocking via MSG_DONTWAIT in UartPollRx().
 
 	*client_sock = fd;
 	*iac_state   = IAC_NORMAL;
@@ -210,7 +210,7 @@ void UartPollRx(void)
 
 	if (Uart.SocketA >= 0 && Uart.RxEnA && !Uart.RxReadyA) {
 		uint8_t raw;
-		int n = recv(Uart.SocketA, &raw, 1, 0);
+		int n = recv(Uart.SocketA, &raw, 1, MSG_DONTWAIT);
 		if (n == 1) {
 			uint8_t filtered;
 			if (UartFilterByte(Uart.SocketA, raw, &Uart.IacStateA,
@@ -231,7 +231,7 @@ void UartPollRx(void)
 
 	if (Uart.SocketB >= 0 && Uart.RxEnB && !Uart.RxReadyB) {
 		uint8_t raw;
-		int n = recv(Uart.SocketB, &raw, 1, 0);
+		int n = recv(Uart.SocketB, &raw, 1, MSG_DONTWAIT);
 		if (n == 1) {
 			uint8_t filtered;
 			if (UartFilterByte(Uart.SocketB, raw, &Uart.IacStateB,
