@@ -103,6 +103,9 @@ int UartInit(void)
 	Uart.RxReadyA = Uart.RxReadyB = false;
 	Uart.IacStateA = Uart.IacStateB = IAC_NORMAL;
 
+	// Input port: IP4 = Ignition Sense (1 = ignition on)
+	Uart.InPort = (1 << 4);
+
 	// Create listening sockets
 	Uart.ListenA = make_listen_socket(UART_PORT_A);
 	fprintf(stderr, "UART_A listening on port %d\n", UART_PORT_A);
@@ -518,6 +521,10 @@ uint8_t UartRegRead(uint32_t address)
 			Uart.RxReadyA = false;
 			break;
 
+		case 4:		// IPCR — Input Port Change Register (no pending change events)
+			val = 0x00;
+			break;
+
 		case 5:		// Interrupt Status Register
 			val = 0x11;                         // TxRdyA(bit0) | TxRdyB(bit4) always set
 			if (Uart.RxReadyA) val |= 0x02;     // RxRdy/FFullA = bit1
@@ -531,6 +538,10 @@ uint8_t UartRegRead(uint32_t address)
 		case 11:	// Receive Holding Register B
 			val = Uart.RxBufB;
 			Uart.RxReadyB = false;
+			break;
+
+		case 13:	// IP0-6 — Input Port register
+			val = Uart.InPort;
 			break;
 
 		default:

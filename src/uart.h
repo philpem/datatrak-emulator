@@ -19,6 +19,7 @@ typedef struct {
 	uint8_t IMR;
 	uint8_t IVR;
 	uint8_t OutPort;
+	uint8_t InPort;               // Input port register (IP0-IP6); bit 4 = IP4 = Ignition Sense
 	uint8_t RxBufA, RxBufB;      // single-byte RX buffers
 	bool    RxReadyA, RxReadyB;  // data-available flags
 	IacState IacStateA, IacStateB;
