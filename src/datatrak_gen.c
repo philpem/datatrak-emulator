@@ -387,10 +387,9 @@ void datatrak_gen_dumpModulated(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf, char
 
 	for (size_t msec = 0; msec < ctx->msPerCycle; msec++) {
 		// Calculate the per-sample phase contribution from the ms-level phase delta.
-		// The full phase range is 1000 counts per cycle (0-999 = 0 to 2pi).
-		// Distribute evenly across all samples in this ms for smooth FM output.
-		double ph_sh_f1 = (((int)buf->f1_phase[msec] - last_ph_f1) / 1000.0) * (2.0 * M_PI) / SAMPLES_PER_MS;
-		double ph_sh_f2 = (((int)buf->f2_phase[msec] - last_ph_f2) / 1000.0) * (2.0 * M_PI) / SAMPLES_PER_MS;
+		// ±PHASE_AMPL counts = ±π radians (half-cycle); distribute evenly across samples.
+		double ph_sh_f1 = (((int)buf->f1_phase[msec] - last_ph_f1) / (double)PHASE_AMPL) * M_PI / SAMPLES_PER_MS;
+		double ph_sh_f2 = (((int)buf->f2_phase[msec] - last_ph_f2) / (double)PHASE_AMPL) * M_PI / SAMPLES_PER_MS;
 		last_ph_f1 = buf->f1_phase[msec];
 		last_ph_f2 = buf->f2_phase[msec];
 
