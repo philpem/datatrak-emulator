@@ -32,8 +32,12 @@
 #define UART_PORT_A 10000
 #define UART_PORT_B 10001
 
-// Define to enable register r/w debug messages
+// Define to enable full register r/w debug messages (very verbose during TX)
 // #define UART_DEBUG_MSGS
+
+// Define to enable key state-change messages only (RX arrivals, IMR/CRA changes,
+// ISR reads) -- much less noisy than UART_DEBUG_MSGS, good for diagnosing hangs
+#define UART_DEBUG_KEY
 
 // Log state changes of the UART output port
 // #define LOG_UART_OUTPORT
@@ -220,6 +224,11 @@ void UartPollRx(void)
 			                   &Uart.IacPendingCmdA, &filtered)) {
 				Uart.RxBufA   = filtered;
 				Uart.RxReadyA = true;
+#ifdef UART_DEBUG_KEY
+				fprintf(stderr, "[UART_A RX] byte=0x%02X '%c'  IMR=0x%02X\n",
+				        filtered, (filtered >= 0x20 && filtered < 0x7F) ? filtered : '.',
+				        Uart.IMR);
+#endif
 				if (Uart.IMR & 0x02)   // RxRdy/FFullA
 					InterruptFlags.uart = true;
 			}
@@ -312,6 +321,16 @@ void UartRegWrite(uint32_t address, uint8_t value)
 #endif
 
 	switch ((address / 2) & 0x0F) {
+		case 0:		// Mode Register 1A / 2A (pointer auto-advances)
+			Uart.MRA[Uart.MRnA ? 1 : 0] = value;
+			Uart.MRnA = !Uart.MRnA;
+			break;
+
+		case 8:		// Mode Register 1B / 2B
+			Uart.MRB[Uart.MRnB ? 1 : 0] = value;
+			Uart.MRnB = !Uart.MRnB;
+			break;
+
 		case 2:		// Command Register A
 #ifdef UART_DEBUG_MSGS
 			printf("UART CRA -->  RxEn %s  TxEn %s  Cmd:%s\n",
@@ -337,6 +356,13 @@ void UartRegWrite(uint32_t address, uint8_t value)
 					Uart.TxEnA = false; break;
 			}
 
+			#ifdef UART_DEBUG_KEY
+			if ((value >> 4) & 0x0F)
+				fprintf(stderr, "[UART CRA] cmd=0x%X  rx_bits=%d tx_bits=%d  RxEn:%d TxEn:%d  pc=%08X\n",
+				        (value >> 4) & 0x0F, value & 0x03, (value >> 2) & 0x03,
+						Uart.RxEnA, Uart.TxEnA,
+						m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
 			switch ((value >> 4) & 0x0F) {
 				case 0:			// null command
 					break;
@@ -346,11 +372,14 @@ void UartRegWrite(uint32_t address, uint8_t value)
 					break;
 
 				case 2:			// Reset receiver
-					Uart.RxEnA = false;
+					// Flushes RX FIFO and clears status bits.
+					// Does NOT change receiver enabled/disabled state.
+					Uart.RxReadyA = false;
 					break;
 
 				case 3:			// Reset transmitter
-					Uart.TxEnA = false;
+					// Flushes TX FIFO. Does NOT change transmitter enabled state.
+					// Fall through -- no state to clear in this emulation.
 
 				case 4:			// Reset error status
 				case 5:			// Reset break change interrupt
@@ -390,6 +419,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 
 		case 5:			// Interrupt mask register
 			Uart.IMR = value;
+#ifdef UART_DEBUG_KEY
+			fprintf(stderr, "[UART IMR write] IMR=0x%02X  RxA=%d RxB=%d  pc=%08X\n",
+			        Uart.IMR, Uart.RxReadyA, Uart.RxReadyB,
+			        m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
 
 #ifdef UART_DEBUG_MSGS
 			fprintf(stderr, "UART IMR = %02X  --> ", value);
@@ -448,11 +482,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 					break;
 
 				case 2:			// Reset receiver
-					Uart.RxEnB = false;
+					Uart.RxReadyB = false;
 					break;
 
 				case 3:			// Reset transmitter
-					Uart.TxEnB = false;
+					// Fall through -- no state to clear in this emulation.
 
 				case 4:			// Reset error status
 				case 5:			// Reset break change interrupt
@@ -519,6 +553,11 @@ uint8_t UartRegRead(uint32_t address)
 	uint8_t val;
 
 	switch ((address >> 1) & 0x0F) {
+		case 0:		// Mode Register 1A / 2A (pointer auto-advances on read)
+			val = Uart.MRA[Uart.MRnA ? 1 : 0];
+			Uart.MRnA = !Uart.MRnA;
+			break;
+
 		case 1:		// Status Register A: bit0=RxRDY, bit2=TxEMT, bit3=TxRDY
 			val = 0x0C | (Uart.RxReadyA ? 0x01 : 0);
 			break;
@@ -533,12 +572,23 @@ uint8_t UartRegRead(uint32_t address)
 			break;
 
 		case 5:		// Interrupt Status Register
-			// TxRdy bits only appear if the corresponding IMR bit is enabled.
-			// (The TX holding register is always empty in this emulation, but we
-			//  gate on IMR so the firmware does not process TX interrupts it masked.)
-			val = (Uart.IMR & 0x11);
-			if ((Uart.IMR & 0x02) && Uart.RxReadyA) val |= 0x02;
-			if ((Uart.IMR & 0x20) && Uart.RxReadyB) val |= 0x20;
+			// TxRdyA (bit 0) and TxRdyB (bit 4) are unconditionally set: the TX
+			// holding register is always empty in this emulation (we send immediately
+			// via TCP), matching real SCC68692 hardware where ISR is NOT masked by IMR.
+			// RxRdy bits reflect actual receive buffer state.
+			val = 0x11;                      // TxRdyA | TxRdyB always set
+			if (Uart.RxReadyA) val |= 0x02;  // RxRdy/FFullA
+			if (Uart.RxReadyB) val |= 0x20;  // RxRdy/FFullB
+#ifdef UART_DEBUG_KEY
+			fprintf(stderr, "[UART ISR read] ISR=0x%02X  IMR=0x%02X  RxA=%d RxB=%d  pc=%08X\n",
+			        val, Uart.IMR, Uart.RxReadyA, Uart.RxReadyB,
+			        m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
+			break;
+
+		case 8:		// Mode Register 1B / 2B
+			val = Uart.MRB[Uart.MRnB ? 1 : 0];
+			Uart.MRnB = !Uart.MRnB;
 			break;
 
 		case 9:		// Status Register B
