@@ -25,6 +25,8 @@ typedef struct {
 	bool    RxReadyA, RxReadyB;  // data-available flags
 	IacState IacStateA, IacStateB;
 	uint8_t  IacPendingCmdA, IacPendingCmdB;  // buffered IAC command byte
+	int      CounterTick;        // counts UartPollRx() calls since last START COUNTER
+	bool     CounterReady;       // ISR bit 3: counter/timer reached zero
 } uart_s;
 
 extern uart_s Uart;

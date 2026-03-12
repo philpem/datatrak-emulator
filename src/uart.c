@@ -110,6 +110,11 @@ int UartInit(void)
 	// Input port: IP4 = Ignition Sense (1 = ignition on)
 	Uart.InPort = (1 << 4);
 
+	// Counter/Timer: starts not-ready; fires periodically once the firmware
+	// issues a START COUNTER command (UartRegRead case 14).
+	Uart.CounterTick  = 0;
+	Uart.CounterReady = false;
+
 	// Create listening sockets
 	Uart.ListenA = make_listen_socket(UART_PORT_A);
 	fprintf(stderr, "UART_A listening on port %d\n", UART_PORT_A);
@@ -144,32 +149,28 @@ static bool UartFilterByte(int sockfd, uint8_t byte, IacState *state,
 				return false;
 			}
 			if (byte == '\r') {
-				// Per Telnet NVT (RFC 854): CR is sent as CR NUL (not a real NUL)
-				// or CR LF. Enter IAC_AFTER_CR so we can swallow the padding NUL.
+				// Hold off: CR NUL -> output CR; CR LF -> output LF
+				// (matching nc's single-LF behavior the firmware already accepts)
 				*state = IAC_AFTER_CR;
-				*out = '\r';
-				return true;
+				return false;  // swallow CR for now; decide on next byte
 			}
 			*out = byte;
 			return true;
 
 		case IAC_AFTER_CR:
-			// We just passed a CR to the firmware.
-			// Discard a trailing NUL (Telnet NVT CR NUL = bare CR, NUL is padding).
-			// Any other byte (e.g. LF from CR LF) is passed through normally.
+			// Resolve the held CR based on the following byte:
+			//   CR NUL  -> output CR  (bare CR on Telnet NVT)
+			//   CR LF   -> output LF  (matches nc's Enter; firmware expects LF)
+			//   CR CR   -> output CR, stay in IAC_AFTER_CR for the second CR
+			//   CR IAC  -> output CR, begin IAC sequence
+			//   CR else -> output CR  (edge case)
 			*state = IAC_NORMAL;
-			if (byte == '\0')
-				return false;  // swallow NVT padding NUL
-			if (byte == 0xFF) {
-				*state = IAC_AFTER_FF;
-				return false;
-			}
-			if (byte == '\r') {
-				*state = IAC_AFTER_CR;
-				*out = '\r';
-				return true;
-			}
-			*out = byte;
+			if (byte == '\0') { *out = '\r'; return true; }  // CR NUL -> CR
+			if (byte == '\n') { *out = '\n'; return true; }  // CR LF  -> LF
+			if (byte == '\r') { *state = IAC_AFTER_CR; *out = '\r'; return true; }
+			if (byte == 0xFF) { *state = IAC_AFTER_FF; return false; }
+			// CR followed by something else: output CR, discard the other byte
+			*out = '\r';
 			return true;
 
 		case IAC_AFTER_FF:
@@ -282,6 +283,20 @@ void UartPollRx(void)
 		} else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
 			UartClientClose(&Uart.SocketB);
 			fprintf(stderr, "UART_B: client disconnected\n");
+		}
+	}
+
+	// --- Counter/Timer ---
+	// Fire CounterReady (ISR bit 3) every ~10ms (~10 UartPollRx calls).
+	// The firmware writes IMR with bit 3 set and then waits for this interrupt
+	// to drive its timing routines. Without it the firmware spins forever.
+	if (!Uart.CounterReady) {
+		Uart.CounterTick++;
+		if (Uart.CounterTick >= 10) {
+			Uart.CounterTick  = 0;
+			Uart.CounterReady = true;
+			if (Uart.IMR & 0x08)   // CounterReady interrupt enabled
+				InterruptFlags.uart = true;
 		}
 	}
 }
@@ -591,6 +606,11 @@ uint8_t UartRegRead(uint32_t address)
 		case 3:		// Receive Holding Register A
 			val = Uart.RxBufA;
 			Uart.RxReadyA = false;
+#ifdef UART_DEBUG_KEY
+			fprintf(stderr, "[UART RHRA read] byte=0x%02X '%c'  pc=%08X\n",
+			        val, (val >= 0x20 && val < 0x7F) ? val : '.',
+			        m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
 			break;
 
 		case 4:		// IPCR — Input Port Change Register (no pending change events)
@@ -602,9 +622,10 @@ uint8_t UartRegRead(uint32_t address)
 			// holding register is always empty in this emulation (we send immediately
 			// via TCP), matching real SCC68692 hardware where ISR is NOT masked by IMR.
 			// RxRdy bits reflect actual receive buffer state.
-			val = 0x11;                      // TxRdyA | TxRdyB always set
-			if (Uart.RxReadyA) val |= 0x02;  // RxRdy/FFullA
-			if (Uart.RxReadyB) val |= 0x20;  // RxRdy/FFullB
+			val = 0x11;                           // TxRdyA | TxRdyB always set
+			if (Uart.RxReadyA)    val |= 0x02;    // RxRdy/FFullA
+			if (Uart.CounterReady) val |= 0x08;   // CounterReady
+			if (Uart.RxReadyB)    val |= 0x20;    // RxRdy/FFullB
 #ifdef UART_DEBUG_KEY
 			fprintf(stderr, "[UART ISR read] ISR=0x%02X  IMR=0x%02X  RxA=%d RxB=%d  pc=%08X\n",
 			        val, Uart.IMR, Uart.RxReadyA, Uart.RxReadyB,
@@ -630,7 +651,13 @@ uint8_t UartRegRead(uint32_t address)
 			val = Uart.InPort;
 			break;
 
-		default:
+		case 14:	// START COUNTER — re-arms the counter/timer and clears CounterReady
+			Uart.CounterReady = false;
+			Uart.CounterTick  = 0;
+			val = 0x00;
+			break;
+
+	default:
 			val = UNIMPLEMENTED_VALUE & 0xFF;
 			break;
 	}
