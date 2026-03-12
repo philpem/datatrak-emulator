@@ -231,14 +231,12 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			// We achieve this with phase rotation. One full rotation happens every 25ms.
 			// 1000 counts / 25ms = an increment of 40 counts per ms
 
-			// TODO: Allow phase offset for each slot to be set, so we can emulate navigation.
-			int slot_phase_ofs_plus  = PHASE_ZERO;
-			int slot_phase_ofs_minus = PHASE_ZERO;
+			int slot_phase_ofs = PHASE_ZERO + ctx->slotPhaseOffset[navslot_n];
 
 			if (time_in_slot < 40) {
 				// F1+ slot, phase advance.
 				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
-					buf->f1_phase[i] = phaseWrap(slot_phase_ofs_plus + (time_in_slot * 40));
+					buf->f1_phase[i] = phaseWrap(slot_phase_ofs + (time_in_slot * 40));
 				} else {
 					buf->f1_phase[i] = PHASE_ZERO;
 				}
@@ -246,7 +244,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			} else {
 				// F1- slot, phase delay.
 				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
-					buf->f1_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+					buf->f1_phase[i] = phaseWrap(slot_phase_ofs - ((time_in_slot - 40) * 40));
 				} else {
 					buf->f1_phase[i] = PHASE_ZERO;
 				}
@@ -256,11 +254,12 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			// Interlaced mode? If so, generate F2 interlaced slots.
 			if (ctx->mode == DATATRAK_MODE_INTERLACED) {
 				int ilslot_n = navslot_n + (ctx->goldcode_n & 1 ? 16 : 8);
+				int il_phase_ofs = PHASE_ZERO + ctx->slotPhaseOffset[ilslot_n];
 
 				if (time_in_slot < 40) {
 					// IL F2+ slot, phase advance.
 					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
-						buf->f2_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
+						buf->f2_phase[i] = phaseWrap(il_phase_ofs + (time_in_slot * 40));
 					} else {
 						buf->f2_phase[i] = PHASE_ZERO;
 					}
@@ -268,7 +267,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				} else {
 					// IL F2- slot, phase delay.
 					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
-						buf->f2_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+						buf->f2_phase[i] = phaseWrap(il_phase_ofs - ((time_in_slot - 40) * 40));
 					} else {
 						buf->f2_phase[i] = PHASE_ZERO;
 					}
@@ -292,14 +291,12 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			// We achieve this with phase rotation. One full rotation happens every 25ms.
 			// 1000 counts / 25ms = an increment of 40 counts per ms
 
-			// TODO: Allow phase offset for each slot to be set, so we can emulate navigation.
-			int slot_phase_ofs_plus  = PHASE_ZERO;
-			int slot_phase_ofs_minus = PHASE_ZERO;
+			int slot_phase_ofs = PHASE_ZERO + ctx->slotPhaseOffset[navslot_n];
 
 			if (time_in_slot < 40) {
 				// F2+ slot, phase advance.
 				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
-					buf->f2_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
+					buf->f2_phase[i] = phaseWrap(slot_phase_ofs + (time_in_slot * 40));
 				} else {
 					buf->f2_phase[i] = PHASE_ZERO;
 				}
@@ -307,7 +304,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 			} else {
 				// F2- slot, phase delay.
 				if (ctx->slotPower[navslot_n] > DATATRAK_RSSI_MIN) {
-					buf->f2_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+					buf->f2_phase[i] = phaseWrap(slot_phase_ofs - ((time_in_slot - 40) * 40));
 				} else {
 					buf->f2_phase[i] = PHASE_ZERO;
 				}
@@ -316,12 +313,13 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 			// Interlaced mode? If so, generate F1 interlaced slots.
 			if (ctx->mode == DATATRAK_MODE_INTERLACED) {
-				int ilslot_n = navslot_n + (ctx->goldcode_n & 1 ? 16 : 8);
+				int ilslot_n = navslot_n + (ctx->goldcode_n & 1 ? 8 : 16);
+				int il_phase_ofs = PHASE_ZERO + ctx->slotPhaseOffset[ilslot_n];
 
 				if (time_in_slot < 40) {
 					// IL F1+ slot, phase advance.
 					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
-						buf->f1_phase[i] = phaseWrap(slot_phase_ofs_plus  + (time_in_slot * 40));
+						buf->f1_phase[i] = phaseWrap(il_phase_ofs + (time_in_slot * 40));
 					} else {
 						buf->f1_phase[i] = PHASE_ZERO;
 					}
@@ -329,7 +327,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 				} else {
 					// IL F1- slot, phase delay.
 					if (ctx->slotPower[ilslot_n] > DATATRAK_RSSI_MIN) {
-						buf->f1_phase[i] = phaseWrap(slot_phase_ofs_minus - ((time_in_slot - 40) * 40));
+						buf->f1_phase[i] = phaseWrap(il_phase_ofs - ((time_in_slot - 40) * 40));
 					} else {
 						buf->f1_phase[i] = PHASE_ZERO;
 					}
@@ -388,13 +386,15 @@ void datatrak_gen_dumpModulated(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf, char
 	int last_ph_f2 = PHASE_ZERO;
 
 	for (size_t msec = 0; msec < ctx->msPerCycle; msec++) {
-		for (size_t s = 0; s < SAMPLES_PER_MS; s++) {
-			// calculate phase shift from last cycle to this
-			double ph_sh_f1 = (((int)buf->f1_phase[msec] - last_ph_f1) / (double)PHASE_AMPL) * (2.0 * M_PI);
-			double ph_sh_f2 = (((int)buf->f2_phase[msec] - last_ph_f2) / (double)PHASE_AMPL) * (2.0 * M_PI);
-			last_ph_f1 = buf->f1_phase[msec];
-			last_ph_f2 = buf->f2_phase[msec];
+		// Calculate the per-sample phase contribution from the ms-level phase delta.
+		// The full phase range is 1000 counts per cycle (0-999 = 0 to 2pi).
+		// Distribute evenly across all samples in this ms for smooth FM output.
+		double ph_sh_f1 = (((int)buf->f1_phase[msec] - last_ph_f1) / 1000.0) * (2.0 * M_PI) / SAMPLES_PER_MS;
+		double ph_sh_f2 = (((int)buf->f2_phase[msec] - last_ph_f2) / 1000.0) * (2.0 * M_PI) / SAMPLES_PER_MS;
+		last_ph_f1 = buf->f1_phase[msec];
+		last_ph_f2 = buf->f2_phase[msec];
 
+		for (size_t s = 0; s < SAMPLES_PER_MS; s++) {
 			// update phase
 			phi_f1 = phi_f1 + theta + ph_sh_f1;
 			phi_f2 = phi_f2 + theta + ph_sh_f2;
