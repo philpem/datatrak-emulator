@@ -8,4 +8,6 @@ typedef struct {
 
 extern volatile InterruptFlags_s InterruptFlags;
 
+void m68k_update_ipl(void);
+
 #endif // MAIN_H_INCLUDED

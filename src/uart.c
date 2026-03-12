@@ -379,9 +379,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 					UartClientClose(&Uart.SocketA);
 			}
 
-			// If IMR transmit interrupt is enabled, pend a TX IRQ
-			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10)) {
+			// If TxRdyA interrupt is enabled, pend a TX IRQ and
+			// immediately update the CPU IPL so it fires promptly.
+			if (Uart.IMR & 0x01) {
 				InterruptFlags.uart = true;
+				m68k_update_ipl();
 			}
 			break;
 
@@ -402,8 +404,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			fprintf(stderr, "\n");
 #endif
 
-			// If TX interrupt is enabled, pend one (transmit buffer always clear)
-			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10)) {
+			// Pend interrupt if any enabled condition is already true:
+			// TX always ready (buffer empty), or RX already has data.
+			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10) ||
+			    ((Uart.IMR & 0x02) && Uart.RxReadyA) ||
+			    ((Uart.IMR & 0x20) && Uart.RxReadyB)) {
 				InterruptFlags.uart = true;
 			}
 			break;
@@ -476,9 +481,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 					UartClientClose(&Uart.SocketB);
 			}
 
-			// If IMR transmit interrupt B is enabled, pend a TX IRQ
+			// If TxRdyB interrupt is enabled, pend a TX IRQ and
+			// immediately update the CPU IPL so it fires promptly.
 			if (Uart.IMR & 0x10) {
 				InterruptFlags.uart = true;
+				m68k_update_ipl();
 			}
 			break;
 
@@ -526,9 +533,12 @@ uint8_t UartRegRead(uint32_t address)
 			break;
 
 		case 5:		// Interrupt Status Register
-			val = 0x11;                         // TxRdyA(bit0) | TxRdyB(bit4) always set
-			if (Uart.RxReadyA) val |= 0x02;     // RxRdy/FFullA = bit1
-			if (Uart.RxReadyB) val |= 0x20;     // RxRdy/FFullB = bit5
+			// TxRdy bits only appear if the corresponding IMR bit is enabled.
+			// (The TX holding register is always empty in this emulation, but we
+			//  gate on IMR so the firmware does not process TX interrupts it masked.)
+			val = (Uart.IMR & 0x11);
+			if ((Uart.IMR & 0x02) && Uart.RxReadyA) val |= 0x02;
+			if ((Uart.IMR & 0x20) && Uart.RxReadyB) val |= 0x20;
 			break;
 
 		case 9:		// Status Register B
