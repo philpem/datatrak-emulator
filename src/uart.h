@@ -5,7 +5,8 @@
 typedef enum {
 	IAC_NORMAL,    // normal data
 	IAC_AFTER_FF,  // received 0xFF, waiting for command byte
-	IAC_AFTER_CMD  // received command, waiting for option byte
+	IAC_AFTER_CMD, // received command, waiting for option byte
+	IAC_AFTER_CR   // just passed '\r' to firmware; discard next '\0' (Telnet NVT: CR NUL = bare CR)
 } IacState;
 
 typedef struct {

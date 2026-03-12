@@ -143,6 +143,32 @@ static bool UartFilterByte(int sockfd, uint8_t byte, IacState *state,
 				*state = IAC_AFTER_FF;
 				return false;
 			}
+			if (byte == '\r') {
+				// Per Telnet NVT (RFC 854): CR is sent as CR NUL (not a real NUL)
+				// or CR LF. Enter IAC_AFTER_CR so we can swallow the padding NUL.
+				*state = IAC_AFTER_CR;
+				*out = '\r';
+				return true;
+			}
+			*out = byte;
+			return true;
+
+		case IAC_AFTER_CR:
+			// We just passed a CR to the firmware.
+			// Discard a trailing NUL (Telnet NVT CR NUL = bare CR, NUL is padding).
+			// Any other byte (e.g. LF from CR LF) is passed through normally.
+			*state = IAC_NORMAL;
+			if (byte == '\0')
+				return false;  // swallow NVT padding NUL
+			if (byte == 0xFF) {
+				*state = IAC_AFTER_FF;
+				return false;
+			}
+			if (byte == '\r') {
+				*state = IAC_AFTER_CR;
+				*out = '\r';
+				return true;
+			}
 			*out = byte;
 			return true;
 
