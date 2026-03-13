@@ -37,7 +37,7 @@
 
 // Define to enable key state-change messages only (RX arrivals, IMR/CRA changes,
 // ISR reads) -- much less noisy than UART_DEBUG_MSGS, good for diagnosing hangs
-#define UART_DEBUG_KEY
+// #define UART_DEBUG_KEY
 
 // Log state changes of the UART output port
 // #define LOG_UART_OUTPORT
