@@ -524,6 +524,15 @@ int main(int argc, char **argv)
 	// Init the debug UART
 	UartInit();
 
+	// Wait for a client to connect to UART A before booting the CPU,
+	// so the firmware's boot output is not lost.
+	fprintf(stderr, "Waiting for UART A client (nc localhost %d)...\n", 10000);
+	while (Uart.SocketA < 0) {
+		UartPollRx();
+		usleep(10000);  // poll every 10ms
+	}
+	fprintf(stderr, "Client connected, starting emulation.\n");
+
 	// Init the phase modulation engine
 	datatrak_gen_init(&dtrkCtx, DATATRAK_MODE_INTERLACED);
 	// Enable slots
@@ -559,6 +568,9 @@ int main(int argc, char **argv)
 		// Run one tick interrupt worth of instructions
 		uint32_t tmp = m68k_execute(CLOCKS_PER_INTERRUPT);
 		clock_cycles += tmp;
+
+		// Poll for incoming UART data and new client connections
+		UartPollRx();
 
 		// Trigger a tick interrupt
 		InterruptFlags.phase_tick = true;
