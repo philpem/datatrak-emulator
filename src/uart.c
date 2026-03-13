@@ -110,10 +110,11 @@ int UartInit(void)
 	// Input port: IP4 = Ignition Sense (1 = ignition on)
 	Uart.InPort = (1 << 4);
 
-	// Counter/Timer: starts not-ready; fires periodically once the firmware
-	// issues a START COUNTER command (UartRegRead case 14).
-	Uart.CounterTick  = 0;
-	Uart.CounterReady = false;
+	// Counter/Timer: starts not-ready; only begins ticking once the firmware
+	// issues its first START COUNTER read (UartRegRead case 14).
+	Uart.CounterTick    = 0;
+	Uart.CounterReady   = false;
+	Uart.CounterStarted = false;
 
 	// Create listening sockets
 	Uart.ListenA = make_listen_socket(UART_PORT_A);
@@ -288,9 +289,9 @@ void UartPollRx(void)
 
 	// --- Counter/Timer ---
 	// Fire CounterReady (ISR bit 3) every ~10ms (~10 UartPollRx calls).
-	// The firmware writes IMR with bit 3 set and then waits for this interrupt
-	// to drive its timing routines. Without it the firmware spins forever.
-	if (!Uart.CounterReady) {
+	// Only counts after the firmware has issued its first START COUNTER read,
+	// so we never fire a spurious interrupt before the firmware sets up the timer.
+	if (Uart.CounterStarted && !Uart.CounterReady) {
 		Uart.CounterTick++;
 		if (Uart.CounterTick >= 10) {
 			Uart.CounterTick  = 0;
@@ -441,6 +442,11 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			break;
 
 		case 3:		// Transmit holding register A
+#ifdef UART_DEBUG_KEY
+			fprintf(stderr, "[UART THRA write] byte=0x%02X '%c'  pc=%08X\n",
+			        value, (value >= 0x20 && value < 0x7F) ? value : '.',
+			        m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
 #ifdef UART_DEBUG_MSGS
 			printf("UARTA --> %c  [%02x]\n", value, value);
 #endif
@@ -479,11 +485,12 @@ void UartRegWrite(uint32_t address, uint8_t value)
 			fprintf(stderr, "\n");
 #endif
 
-			// Pend interrupt if any enabled condition is already true:
-			// TX always ready (buffer empty), or RX already has data.
+			// Pend interrupt if any enabled condition is already asserted:
+			// TX always ready (buffer empty), RX has data, or CounterReady still set.
 			if ((Uart.IMR & 0x01) || (Uart.IMR & 0x10) ||
 			    ((Uart.IMR & 0x02) && Uart.RxReadyA) ||
-			    ((Uart.IMR & 0x20) && Uart.RxReadyB)) {
+			    ((Uart.IMR & 0x20) && Uart.RxReadyB) ||
+			    ((Uart.IMR & 0x08) && Uart.CounterReady)) {
 				InterruptFlags.uart = true;
 			}
 			break;
@@ -651,10 +658,15 @@ uint8_t UartRegRead(uint32_t address)
 			val = Uart.InPort;
 			break;
 
-		case 14:	// START COUNTER — re-arms the counter/timer and clears CounterReady
-			Uart.CounterReady = false;
-			Uart.CounterTick  = 0;
+		case 14:	// START COUNTER — arms/re-arms the counter/timer, clears CounterReady
+			Uart.CounterStarted = true;
+			Uart.CounterReady   = false;
+			Uart.CounterTick    = 0;
 			val = 0x00;
+#ifdef UART_DEBUG_KEY
+			fprintf(stderr, "[UART START COUNTER] CounterReady cleared, re-armed  pc=%08X\n",
+			        m68k_get_reg(NULL, M68K_REG_PPC));
+#endif
 			break;
 
 	default:

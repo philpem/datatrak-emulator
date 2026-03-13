@@ -27,6 +27,7 @@ typedef struct {
 	uint8_t  IacPendingCmdA, IacPendingCmdB;  // buffered IAC command byte
 	int      CounterTick;        // counts UartPollRx() calls since last START COUNTER
 	bool     CounterReady;       // ISR bit 3: counter/timer reached zero
+	bool     CounterStarted;     // true once firmware has issued first START COUNTER read
 } uart_s;
 
 extern uart_s Uart;
