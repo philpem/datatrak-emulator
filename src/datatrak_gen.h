@@ -20,12 +20,18 @@ typedef enum {
 	DATATRAK_MODE_INTERLACED		///< F1 and F2 chain, 24 slots, interlaced.
 } DATATRAK_MODE;
 
+typedef enum {
+	DATATRAK_COMPENSATION_NONE,		///< No compensation for receiver IF-filter effects (for transmission)
+	DATATRAK_COMPENSATION_MK2		///< Apply group delay compensation similar to a Mk2 IF strip (for emulation of a Mk2 Locator)
+} DATATRAK_COMPENSATION;
+
 typedef struct {
 	// -- User configurable parameters (at any time) --
 	uint8_t rfNoiseLevel;						///< RF noise level (returned for unmodulated slots)
 	int16_t slotPhaseOffset[24];				///< Slot phase offsets
 	uint8_t slotPower[24];						///< Slot transmit power
 	uint8_t trig1Power, trig2Power;				///< F1/F2 trigger transmit power
+	DATATRAK_COMPENSATION compensation;			///< IF-strip compensation mode
 
 	// -- Calculated per-mode parameters --
 	int numNavslotsPerCycle;					///< Number of navslots per cycle (usually 8)
@@ -47,7 +53,7 @@ typedef struct {
 	uint8_t  f2_amplitude[DATATRAK_BUF_LEN];	///< F2 signal strength 0-255
 } DATATRAK_OUTBUF;
 
-void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode);
+void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode, const DATATRAK_COMPENSATION comp);
 void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf);
 void datatrak_gen_dumpRaw(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf, char *filename);
 void datatrak_gen_dumpModulated(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf, char *filename);

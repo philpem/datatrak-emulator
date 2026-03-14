@@ -52,8 +52,128 @@ int16_t DT_TRIG375_TEMPLATE[40] = {
  */
 const uint32_t GOLDCODE[] = {0xFA9B8700, 0xAE32BD97};
 
+/*
+ * Trigger synthesis
+ * =================
+ *
+ * Generates a pure-sine waveform whose parameters (amplitude A, starting
+ * phase φ) are chosen so that after passing through the receiver's software
+ * IIR filter (getPhaseMeas, firmware 0x97CE), the filter's output matches
+ * the firmware's stored 40-sample trigger templates as closely as possible.
+ *
+ * Signal path from generator to SAD comparator:
+ *
+ *   gen_trigger() → [IIR bandpass filter, 0x97CE] → SAD → lock decision
+ *
+ *
+ * Derivation of A and φ (three steps; see derive_trigger_params.c)
+ * ----------------------------------------------------------------
+ *
+ * Step 1 — Template DFT
+ *   Fit A*sin(2πfn/Fs + φ) to the firmware template using a single-bin
+ *   DFT.  This gives the amplitude and phase the IIR is expected to output
+ *   at steady state.
+ *
+ *     50Hz template:    A_tmpl ≈ 253.8,  φ_tmpl = +70.45°
+ *     37.5Hz template:  A_tmpl ≈ 240.6,  φ_tmpl = −118.21°
+ *
+ * Step 2 — LTI steady-state IIR correction
+ *   The IIR (H(z) = (65/256)(1−z⁻¹) / [(1−(13/16)z⁻¹)(1−(11/16)z⁻¹)])
+ *   attenuates the input by |H| ≈ 0.577 and phase-advances the output by
+ *   ∠H at both trigger frequencies.  Working backwards:
+ *
+ *     A_lti   = A_tmpl / |H|
+ *     φ_lti   = φ_tmpl − ∠H
+ *
+ *   IIR frequency response at trigger frequencies:
+ *
+ *     Frequency    |H|     ∠H (advance)   Group delay
+ *     50 Hz        0.5776   +1.61°          2.58 ms
+ *     37.5 Hz      0.5728  +15.32°          3.57 ms
+ *
+ * Step 3 — Numerical startup-transient correction
+ *   The IIR starts each trigger window cold (settled on the unmodulated
+ *   carrier).  The large-step guard in the firmware fires on the first
+ *   sample of the trigger waveform, kicking iir1 by ±5333 counts.  This
+ *   transient takes ~5 samples to decay and shifts the apparent phase of
+ *   the waveform as seen by the SAD correlator.  A coarse-then-fine
+ *   numerical search (A: 300–600 in 0.5-count steps; φ: ±180° in 0.1°
+ *   steps) over the exact integer IIR model finds the global minimum SAD.
+ *
+ *   Combined phase corrections:
+ *
+ *     Freq     φ_tmpl    − ∠H      − Δφ_transient  = φ_opt
+ *     50Hz:   +70.45°  −  1.61°  −  50.63°        = +18.20°
+ *     37.5Hz: −118.21° − 15.32°  −  32.66°        = −166.20°
+ *
+ *   Both results can also be expressed as small deviations from the
+ *   transmitter's nominal ideal phases:
+ *
+ *     50Hz:    φ_opt = 0°   + 18.2°   (carrier starts 18° ahead of ideal)
+ *     37.5Hz:  φ_opt = 180° − 13.8°   (carrier starts 14° ahead of ideal)
+ *
+ *
+ * Why are both corrections similar (~14–18°)?
+ * -------------------------------------------
+ * The firmware templates were captured from a live receiver, not from a
+ * simulation.  The receiver's IF bandpass filter (a two-section stagger-
+ * tuned LC filter, f₁=21.1 kHz, f₂=19.2 kHz) introduces a group delay of
+ * τ ≈ 1.017 ms at the passband peak (~20.9 kHz).  This delay is equivalent
+ * to the phase advance seen at modulation frequencies:
+ *
+ *     τ = φ / (360° × f)
+ *     50Hz:    18.2° / (360° × 50)   × 1000 = 1.011 ms  ⎤
+ *     37.5Hz:  13.8° / (360° × 37.5) × 1000 = 1.022 ms  ⎦  mean: 1.017 ms
+ *
+ * The corrections are therefore not arbitrary — they encode the group delay
+ * of the receiver's hardware IF filter, which the simulator lacks.
+ *
+ * IMPORTANT — deployment dependency:
+ *   These phase constants are correct for direct injection to the receiver's
+ *   phase-measurement input (bypassing the IF).  If the signal is instead
+ *   transmitted over RF and received through a real antenna and IF chain, use
+ *   ideal phases 0° and 180°: the IF filter will apply the ~1 ms delay
+ *   naturally.  Using the pre-corrected phases through a real IF would double
+ *   the correction and degrade lock performance.
+ *
+ *
+ * Achieved SAD scores (lower = better; lock threshold = 1000, target ≤ 500):
+ *   50Hz:    493  (hardware: 493, exact match)
+ *   37.5Hz:  392  (hardware: 394, 2-count rounding)
+ */
+static const double PHI_50HZ_MK2  =   18.20 * (M_PI / 180.0);  /* 0°   + 18.2° IF-filter correction */
+static const double PHI_375HZ_MK2 = -166.20 * (M_PI / 180.0);  /* 180° − 13.8° IF-filter correction */
+static const double A_TRIG        = 450.0;                     /* pre-IIR amplitude (IIR outputs ~254) */
 
-void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
+// Ideal phase values
+static const double PHI_50HZ_IDEAL  =    0.0 * (M_PI / 180.0);  /* 0°   */
+static const double PHI_375HZ_IDEAL = -180.0 * (M_PI / 180.0);  /* 180° */
+
+/*
+ * gen_trigger - write one trigger waveform into out[0..pre_len+39]
+ *
+ *   out     - output buffer, must hold (pre_len + 40) uint16_t values
+ *   f_hz    - trigger frequency (50.0 or 37.5)
+ *   phi_rad - starting phase (PHI_50HZ or PHI_375HZ)
+ *   pre_len - samples of continuous sine written before the 40-sample FTS
+ *             window (n = -pre_len .. -1).  The caller places these in the
+ *             pre-trigger gap immediately before the trigger slot so that
+ *             the IIR enters the window already tracking the waveform.
+ *             Set to 0 for a cold-start trigger (current usage; SAD 493/392).
+ *
+ * Note: no clamping to [PHASE_MIN, PHASE_MAX] is applied.  With A_TRIG=450
+ * and PHASE_ZERO=499 the output spans [49, 949], well within [0, 999].
+ * Restore the clamp if A_TRIG is ever increased beyond ~500.
+ */
+static void gen_trigger(uint16_t *out, double f_hz, double phi_rad, int pre_len)
+{
+    for (int n = -pre_len; n < 40; n++) {
+        double v = A_TRIG * sin(2.0 * M_PI * f_hz * n / 1000.0 + phi_rad) + PHASE_ZERO;
+        out[n + pre_len] = (uint16_t)round(v);
+    }
+}
+
+void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode, const DATATRAK_COMPENSATION comp)
 {
 	switch (mode)
 	{
@@ -79,48 +199,36 @@ void datatrak_gen_init(DATATRAK_LF_CTX *ctx, const DATATRAK_MODE mode)
 
 	// Set initial conditions
 	ctx->goldcode_n = 0;
-	ctx->clock_n = 12345;
+	ctx->clock_n = 0;
 	for (size_t i=0; i<ctx->numNavslotsTotal; i++) {
 		ctx->slotPhaseOffset[i] = 0;
 		ctx->slotPower[i] = DATATRAK_RSSI_MIN;
 	}
 
+	// Set up IF-strip compensation
+	ctx->compensation = comp;
+	double phi50, phi375;
+	switch(comp) {
+		case DATATRAK_COMPENSATION_NONE:
+			// No compensation, generate signals for transmission
+			phi50  = PHI_50HZ_IDEAL;
+			phi375 = PHI_375HZ_IDEAL;
+			break;
+
+		case DATATRAK_COMPENSATION_MK2:
+			// Compensation for Mk2 Locator IF strip
+			phi50  = PHI_50HZ_MK2;
+			phi375 = PHI_375HZ_MK2;
+			break;
+
+		default:
+			assert(1==0);
+			break;
+	}
+
 	// Generate trigger templates
-#if 0
-	// 40ms at 1kHz sample rate = 40 samples
-	const double nSamples = 40.0; // 1000.0 * 40.0e-3;
-# warning "Generating Trigger from scratch: this currently doesn't work well"
-	for (int i=0; i < 40; i++) {
-		// 50Hz trigger is 2 cycles of 50Hz
-		trig_50_template[i] = trunc(sin((double)(i) / nSamples * M_PI * 2.0 * 2.0) * PHASE_AMPL + PHASE_ZERO);
-		// 37.5Hz trigger is 1.5 cycles of 37.5Hz with 180-degree phase offset
-		trig_375_template[i] = trunc(sin(((double)(i) / nSamples * M_PI * 2.0 * 1.5) + M_PI) * PHASE_AMPL + PHASE_ZERO);
-	}
-#else
-//# warning "Generating Trigger from rescaled firmware values"
-	const double scale = 1.73;	// 1.73 gives the best balance of FTS and tracking trigger quality.
-								// 500 peak = 289 after scaling, what's going on?
-	// TODO: Look into the processing FTS and Tracking do and how they differ.
-// value   FTS qual   post-lock qual       time to get FTS lock
-// -----   --------   --------------       --------------------
-// 1.60 =  966 FTS -- 912 post lock     -- instant (GC=7)
-// 1.70 =  733 FTS -- 792 post lock     -- instant (GC=7)
-// 1.73 =  717 FTS -- 757-758 post lock -- instant FTS lock (GC=7)
-// 1.75 =  738 FTS -- 740 post lock     -- instant
-// 1.80 =  814 FTS -- 701 post lock     -- instant
-// 1.85 =  924 FTS -- 666 post lock     -- instant
-// 1.90 =  900 FTS -- 658 post lock (takes a few tries to FTS)
-// 1.94 =  955 FTS -- 649 post lock
-// 1.95 =      FTS -- 646 post lock
-// 1.97 =  989 FTS -- 647 post lock
-// 1.98 = 647 post lock
-// 1.99+ = No Trigger
-	for (int i=0; i < 40; i++) {
-		// Re-scale the firmware templates - convert from signed-around-zero to unsigned 0-1000
-		ctx->trig50_template[i]  = trunc((double)(DT_TRIG50_TEMPLATE[i])  * scale + PHASE_ZERO);
-		ctx->trig375_template[i] = trunc((double)(DT_TRIG375_TEMPLATE[i]) * scale + PHASE_ZERO);
-	}
-#endif
+	gen_trigger(ctx->trig50_template,  50,   phi50,  0);
+	gen_trigger(ctx->trig375_template, 37.5, phi375, 0);
 }
 
 /**
@@ -169,6 +277,12 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 		buf->f1_phase[i]     = buf->f2_phase[i]     = PHASE_ZERO;
 		buf->f1_amplitude[i] = buf->f2_amplitude[i] = DATATRAK_RSSI_MIN;
 
+		// The antialiasing slots and trigger/clock settling need to be modulated
+		// with zero phase by the chain master.
+		// The IIR filter in the receiver uses them to eliminate slow phase
+		// wander caused by drift between the base station and the Locator's
+		// TCXO clock.
+
 		if ( (i < 40) ||					//   0 -  40ms: Anti-aliasing 1
 			((i >= 40) && (i < 45)) ||		//  40 -  45ms: pre-trigger settling
 			((i >= 85) && (i < 95)) ||		//  85 -  95ms: pre-clock settling
@@ -182,9 +296,9 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 		} else if ((i >= 45) && (i < 85)) {		// 45-85ms: TRIGGER
 			// -- 45 - 85ms: Trigger (Gold Code) --
 			if (GOLDCODE[goldcode_word] & (1<<goldcode_bit)) {
-				buf->f1_phase[i] = roundf(ctx->trig375_template[i-45] * 1);
+				buf->f1_phase[i] = ctx->trig375_template[i-45];
 			} else {
-				buf->f1_phase[i] = roundf(ctx->trig50_template[i-45] * 1);
+				buf->f1_phase[i] = ctx->trig50_template[i-45];
 			}
 			buf->f1_amplitude[i] = DATATRAK_RSSI_MAX;
 		} else if ((i >= 95) && (i < 115)) {
@@ -337,7 +451,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 		// After this, 20ms guard2 and we're done with the cycle
 		} else {
-			buf->f1_phase[i] = buf->f2_phase[i] = PHASE_ZERO;
+			buf->f1_phase[i] = buf->f2_phase[i] = 238;
 			buf->f1_amplitude[i] = buf->f2_amplitude[i] = DATATRAK_RSSI_MIN;
 		}
 	}

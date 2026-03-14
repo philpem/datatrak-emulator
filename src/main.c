@@ -534,7 +534,16 @@ int main(int argc, char **argv)
 	fprintf(stderr, "Client connected, starting emulation.\n");
 
 	// Init the phase modulation engine
-	datatrak_gen_init(&dtrkCtx, DATATRAK_MODE_INTERLACED);
+	// Compensate for the Mk2 IF strip and IIR behaviour
+	datatrak_gen_init(&dtrkCtx, DATATRAK_MODE_INTERLACED, DATATRAK_COMPENSATION_MK2);
+
+	// DEBUG: start GC at a nonzero offset
+	// GC=14 gives a mix of 0/1 bits for FTS
+	//dtrkCtx.goldcode_n = 14;
+
+	// Set initial clock (number of 64-GC loops)
+	dtrkCtx.clock_n = 12345;
+
 	// Enable slots
 	//
 	// Combinations:
