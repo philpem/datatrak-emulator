@@ -256,7 +256,7 @@ void datatrak_gen_generate(DATATRAK_LF_CTX *ctx, DATATRAK_OUTBUF *buf)
 
 	// -- Preamble --
 	// AA1: 0-40ms (phase=0)
-	// Trigger and clock: 5ms gap, 40ms clock, 10ms gap, 20ms clock, 5ms gap
+	// Trigger and clock: 5ms gap, 40ms trigger, 10ms gap, 20ms clock, 5ms gap
 	// Station data: 15ms gap, (20ms dibit, 5ms gap)*2 ==> (120 to 185 ms =  65ms long)
 	// Vehicle data: 15ms gap, (20ms dibit, 5ms gap)*4 ==> (185 to 300 ms = 115ms long)
 	// AA2: 300-340ms (phase=0)
